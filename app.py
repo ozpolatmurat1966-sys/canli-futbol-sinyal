@@ -489,8 +489,13 @@ def espn_scoreboard_for_date(date_text, league_code):
 
 def espn_matches_for_date(date_text):
     """ESPN public scoreboards for selected major leagues; odds are never fabricated."""
-    leagues = ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "por.1",
-               "ned.1", "usa.1", "uefa.champions", "uefa.europa"]
+    leagues = [
+        "eng.1", "eng.2", "eng.3", "eng.4", "eng.5",
+        "esp.1", "esp.2", "ita.1", "ita.2", "ger.1", "ger.2",
+        "fra.1", "fra.2", "por.1", "ned.1", "bel.1", "sco.1",
+        "usa.1", "mex.1", "arg.1", "bra.1", "aus.1", "jpn.1",
+        "uefa.champions", "uefa.europa", "uefa.europa.conf"
+    ]
     combined, errors = [], []
     successful_sources = 0
     for league_code in leagues:
@@ -1539,11 +1544,8 @@ with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
         with st.spinner("Canlı maçlar yükleniyor..."):
-            if False and API_KEY:
-                data, err, _ = api_get("fixtures", {"live": "all"})
-            else:
-                data, err = None, "API-Football anahtarı tanımlı değil."
-            source = "API-Football"
+            data, err = None, "Eski API sağlayıcısı devre dışı; alternatif kaynaklar deneniyor."
+            source = "Ücretsiz/açık skor kaynakları"
             # Providers phrase exhausted quotas differently (e.g. "request limit for the day").
             err_text = str(err or "").lower()
             quota_exhausted = any(term in err_text for term in (
@@ -1598,7 +1600,7 @@ with live_tab:
                         data = []
                         err = None
                         source = "ESPN açık skor panoları"
-                        st.session_state["live_notice"] = "Ana kaynaklar kullanılamadı. ESPN yedeği yanıt verdi ancak desteklenen liglerde şu an canlı maç yok."
+                        st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Daha geniş lig kapsamı için yeniden deneyebilir veya Tarihe göre maçlar sekmesini kullanabilirsin."
                     elif err:
                         err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
         if err:
@@ -1614,7 +1616,7 @@ with live_tab:
     if st.session_state.get("live_notice"):
         st.info(st.session_state["live_notice"])
     if "live_matches" in st.session_state:
-        st.caption("Canlı veri kaynağı: " + st.session_state.get("live_source", "API-Football"))
+        st.caption("Canlı veri kaynağı: " + st.session_state.get("live_source", "Ücretsiz/açık skor kaynakları"))
         show_matches(st.session_state["live_matches"], "live")
     else:
         st.info("Canlı maçları görmek için yukarıdaki düğmeye basın.")
