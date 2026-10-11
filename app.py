@@ -827,9 +827,9 @@ def apifootball_com_live_matches():
     today_text = date.today().isoformat()
     try:
         response = requests.get(
-            "https://apiv2.apifootball.com/",
+            "https://apiv3.apifootball.com/",
             params={"action": "get_events", "from": today_text, "to": today_text,
-                    "timezone": "Europe/Istanbul", "APIkey": APIFOOTBALL_API_KEY},
+                    "match_live": "1", "timezone": "Europe/Istanbul", "APIkey": APIFOOTBALL_API_KEY},
             headers={"Accept": "application/json"},
             timeout=18,
         )
