@@ -6,6 +6,29 @@ st.set_page_config(page_title="Futbol Analiz Merkezi", page_icon="⚽", layout="
 
 BASE_URL = "https://v3.football.api-sports.io"
 
+STAT_TRANSLATIONS = {
+    "Shots on Goal": "İsabetli Şut",
+    "Shots off Goal": "İsabetsiz Şut",
+    "Total Shots": "Toplam Şut",
+    "Blocked Shots": "Engellenen Şut",
+    "Shots insidebox": "Ceza Sahası İçinden Şut",
+    "Shots inside box": "Ceza Sahası İçinden Şut",
+    "Shots outsidebox": "Ceza Sahası Dışından Şut",
+    "Shots outside box": "Ceza Sahası Dışından Şut",
+    "Fouls": "Faul",
+    "Corner Kicks": "Korner",
+    "Offsides": "Ofsayt",
+    "Ball Possession": "Topla Oynama",
+    "Yellow Cards": "Sarı Kart",
+    "Red Cards": "Kırmızı Kart",
+    "Goalkeeper Saves": "Kaleci Kurtarışı",
+    "Total passes": "Toplam Pas",
+    "Passes accurate": "İsabetli Pas",
+    "Passes %": "Pas İsabeti",
+    "Expected Goals": "Beklenen Gol (xG)",
+    "expected_goals": "Beklenen Gol (xG)",
+}
+
 def get_secret(name, default=""):
     try:
         return st.secrets.get(name, default)
@@ -81,7 +104,7 @@ def render_api_meta(payload):
     if payload.get("errors"):
         st.caption(f"Sağlayıcı hata ayrıntısı: {payload['errors']}")
 
-def render_stats(fixture_id):
+def render_stats(fixture_id, match=None):
     with st.spinner("İstatistikler kontrol ediliyor..."):
         stats, err, payload = api_get("fixtures/statistics", {"fixture": fixture_id})
 
@@ -105,13 +128,80 @@ def render_stats(fixture_id):
     for team_stats in stats:
         st.subheader(team_stats.get("team", {}).get("name", "Takım"))
         rows = [
-            {"İstatistik": item.get("type", "—"), "Değer": item.get("value", "—")}
+            {"İstatistik": STAT_TRANSLATIONS.get(item.get("type", ""), item.get("type", "—")),
+             "Değer": item.get("value", "—")}
             for item in team_stats.get("statistics", [])
         ]
         if rows:
             st.dataframe(rows, use_container_width=True, hide_index=True)
         else:
             st.info("API bu takım için istatistik satırı döndürmedi.")
+
+    # Simple transparent rule-based indicators; not a validated predictive model.
+    if len(stats) >= 2:
+        def stat_map(team_row):
+            return {row.get("type"): row.get("value") for row in team_row.get("statistics", [])}
+        home_stats = stat_map(stats[0])
+        away_stats = stat_map(stats[1])
+
+        def number(value):
+            if value is None:
+                return None
+            try:
+                return float(str(value).replace("%", "").replace(",", "."))
+            except (ValueError, TypeError):
+                return None
+
+        home_shots = number(home_stats.get("Total Shots"))
+        away_shots = number(away_stats.get("Total Shots"))
+        home_on = number(home_stats.get("Shots on Goal"))
+        away_on = number(away_stats.get("Shots on Goal"))
+        home_corners = number(home_stats.get("Corner Kicks"))
+        away_corners = number(away_stats.get("Corner Kicks"))
+        home_poss = number(home_stats.get("Ball Possession"))
+        away_poss = number(away_stats.get("Ball Possession"))
+
+        st.subheader("İstatistiklere dayalı ön değerlendirme")
+        st.caption("Bu bölüm basit kurallarla çalışır; geçmiş verilerle doğrulanmış tahmin modeli değildir.")
+        signals = []
+        if home_on is not None and away_on is not None and home_shots is not None and away_shots is not None:
+            if home_on + away_on >= 5 and home_shots + away_shots >= 14:
+                signals.append("Şut hacmi yüksek: maçta gol ihtimali artmış olabilir; tek başına bahis sinyali değildir.")
+            if abs(home_on - away_on) >= 3:
+                side = stats[0].get("team", {}).get("name", "Ev sahibi") if home_on > away_on else stats[1].get("team", {}).get("name", "Deplasman")
+                signals.append(f"İsabetli şut üstünlüğü: {side}.")
+        if home_corners is not None and away_corners is not None and home_corners + away_corners >= 7:
+            signals.append("Toplam korner sayısı şimdiden yüksek; kalan süre ve maç akışı ayrıca değerlendirilmelidir.")
+        if home_poss is not None and away_poss is not None and abs(home_poss - away_poss) >= 20:
+            side = stats[0].get("team", {}).get("name", "Ev sahibi") if home_poss > away_poss else stats[1].get("team", {}).get("name", "Deplasman")
+            signals.append(f"Topa sahip olma üstünlüğü: {side}; bu veri tek başına galibiyet olasılığı anlamına gelmez.")
+        if signals:
+            for signal in signals:
+                st.write("• " + signal)
+        else:
+            st.info("Şu an basit kuralları tetikleyecek yeterli istatistik yok. Pas geçmek daha doğru olabilir.")
+
+    st.divider()
+    st.subheader("İddaa oranları")
+    if st.button("Bu maçın mevcut oranlarını getir", key=f"odds_{fixture_id}"):
+        with st.spinner("Oranlar kontrol ediliyor..."):
+            odds, odds_err, odds_payload = api_get("odds", {"fixture": fixture_id})
+        if odds_err:
+            st.error("Oran isteği başarısız oldu.")
+            st.code(odds_err)
+        elif not odds:
+            st.info("Bu maç için oran verisi dönmedi. Ücretsiz API planı veya ilgili lig/maç oran kapsamı sınırlı olabilir.")
+        else:
+            for odds_item in odds:
+                for bookmaker in odds_item.get("bookmakers", []):
+                    st.markdown(f"**{bookmaker.get('name', 'Bahis şirketi')}**")
+                    for bet in bookmaker.get("bets", []):
+                        with st.expander(bet.get("name", "Pazar")):
+                            st.dataframe(
+                                [{"Seçenek": value.get("value", "—"), "Oran": value.get("odd", "—")}
+                                 for value in bet.get("values", [])],
+                                use_container_width=True, hide_index=True
+                            )
 
 def render_lineups(fixture_id):
     with st.spinner("Kadro bilgileri kontrol ediliyor..."):
@@ -260,7 +350,9 @@ with tab_help:
     st.subheader("Kapsam ve sınırlamalar")
     st.markdown("""
 - Canlı maç listesi ve tarih bazlı fikstür.
-- API'nin gerçekten sağladığı maç istatistikleri ve kadro bilgileri.
+- Türkçeleştirilmiş maç istatistikleri.
+- API'nin gerçekten sağladığı maç istatistikleri, kadro bilgileri ve mevcutsa oranlar.
+- İstatistiklerden şeffaf, basit ön değerlendirme göstergeleri.
 - İstatistik/kadro isteğinde boş yanıt ile API/bağlantı hatasını ayrı gösterme.
 - API anahtarı ve uygulama şifresi Streamlit Secrets üzerinden okunur.
 
