@@ -1243,6 +1243,68 @@ with st.expander("10 kaynağın bağlantı ve erişim durumu", expanded=True):
         _c3.caption(_src["access"])
 
 st.caption("Bağlantı testi yalnızca sitenin web adresine erişilebildiğini ölçer; canlı maç/oran API'sinin çalıştığını kanıtlamaz.")
+
+with st.expander("Gerçek veri API'lerini kontrol et (mevcut anahtarlar)", expanded=False):
+    st.warning("Bu kontrol yalnızca uygulamada zaten kayıtlı API anahtarlarını kullanır. Her sağlayıcı için bir test isteği gönderebilir ve günlük kotayı etkileyebilir.")
+    if st.button("🧪 Gerçek API bağlantılarını test et", key="test_real_data_apis"):
+        import pandas as _pd
+        _api_rows = []
+        _api_progress = st.progress(0, text="Gerçek veri sağlayıcıları test ediliyor...")
+        _checks = []
+        if API_KEY:
+            _checks.append(("API-Football", "https://v3.football.api-sports.io/status", {"x-apisports-key": API_KEY}, None))
+        else:
+            _api_rows.append({"Sağlayıcı": "API-Football", "Durum": "Anahtar yok", "HTTP": "—", "Detay": "Streamlit Secrets içinde API_FOOTBALL_KEY tanımlı değil."})
+        if SPORTMONKS_API_TOKEN:
+            _checks.append(("Sportmonks", "https://api.sportmonks.com/v3/football/livescores", {}, {"api_token": SPORTMONKS_API_TOKEN, "include": "participants;league;scores;state"}))
+        else:
+            _api_rows.append({"Sağlayıcı": "Sportmonks", "Durum": "Anahtar yok", "HTTP": "—", "Detay": "Streamlit Secrets içinde SPORTMONKS_API_TOKEN tanımlı değil."})
+        if FOOTBALL_DATA_TOKEN:
+            _checks.append(("football-data.org", "https://api.football-data.org/v4/competitions", {"X-Auth-Token": FOOTBALL_DATA_TOKEN}, {"limit": 1}))
+        else:
+            _api_rows.append({"Sağlayıcı": "football-data.org", "Durum": "Anahtar yok", "HTTP": "—", "Detay": "Streamlit Secrets içinde FOOTBALL_DATA_TOKEN tanımlı değil."})
+        _checks.append(("OpenLigaDB", "https://api.openligadb.de/getmatchdata/bl1", {}, None))
+        _total = max(1, len(_checks))
+        for _idx, (_name, _url, _headers, _params) in enumerate(_checks, start=1):
+            try:
+                _response = requests.get(_url, headers=_headers, params=_params, timeout=10)
+                _detail = ""
+                if _response.status_code == 200:
+                    _state = "API yanıt verdi"
+                    try:
+                        _payload = _response.json()
+                        if _name == "API-Football":
+                            _api_info = _payload.get("response", {}) if isinstance(_payload, dict) else {}
+                            _detail = "Kimlik doğrulama yanıtı alındı"
+                            if isinstance(_api_info, dict):
+                                _detail += f"; kalan günlük istek: {_api_info.get('requests', {}).get('remaining', 'bilinmiyor')}"
+                        elif _name == "Sportmonks":
+                            _items = _payload.get("data", []) if isinstance(_payload, dict) else []
+                            _detail = f"Canlı maç kaydı: {len(_items) if isinstance(_items, list) else 'yanıt alındı'}"
+                        elif _name == "football-data.org":
+                            _items = _payload.get("competitions", []) if isinstance(_payload, dict) else []
+                            _detail = f"Listelenen müsabaka: {len(_items) if isinstance(_items, list) else 'yanıt alındı'}"
+                        elif _name == "OpenLigaDB":
+                            _detail = "Açık fikstür uç noktası yanıt verdi; tüm ligleri kapsamaz"
+                    except Exception:
+                        _detail = "Yanıt alındı; JSON içeriği okunamadı"
+                elif _response.status_code in (401, 403):
+                    _state, _detail = "Kimlik doğrulama / erişim hatası", _response.text[:220]
+                elif _response.status_code == 429:
+                    _state, _detail = "Kota / hız sınırı", _response.text[:220]
+                else:
+                    _state, _detail = "API hatası", _response.text[:220]
+                _api_rows.append({"Sağlayıcı": _name, "Durum": _state, "HTTP": _response.status_code, "Detay": _detail})
+            except requests.RequestException as _exc:
+                _api_rows.append({"Sağlayıcı": _name, "Durum": "Bağlantı hatası", "HTTP": "—", "Detay": str(_exc)[:220]})
+            _api_progress.progress(_idx / _total, text=f"Test: {_name} ({_idx}/{_total})")
+        _api_progress.empty()
+        st.session_state["real_api_health"] = _api_rows
+        st.success("Gerçek veri API testi tamamlandı.")
+    if "real_api_health" in st.session_state:
+        import pandas as _pd
+        st.dataframe(_pd.DataFrame(st.session_state["real_api_health"]), use_container_width=True, hide_index=True)
+        st.caption("API yanıtı alınması bütün maçlarda veri olduğu veya bahis oranlarının erişilebilir olduğu anlamına gelmez. Sportmonks canlı oranları ayrıca paket/izin kapsamına bağlıdır.")
 if st.button("🔎 10 kaynağın bağlantısını test et", key="test_ten_sources"):
     import pandas as _pd
     _health_rows = []
