@@ -1710,11 +1710,11 @@ with live_tab:
                             err = None
                             source = "ESPN açık skor panoları"
                             if FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_error:
-                            st.session_state["live_notice"] = "5DollarFootballAPI yanıt vermedi: " + str(five_dollar_error)[:220] + " | ESPN de şu an canlı maç bulamadı. Kaynak durumu sekmesinden ayrıntıları kontrol et."
-                        elif FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_returned:
-                            st.session_state["live_notice"] = "5DollarFootballAPI yanıt verdi ancak canlı maç listesi boş döndü; ESPN yedeğinde de şu an canlı maç bulunamadı. Kaynak durumu sekmesinden 5DollarFootballAPI yanıtını kontrol et."
-                        else:
-                            st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Daha geniş lig kapsamı için yeniden deneyebilir veya Tarihe göre maçlar sekmesini kullanabilirsin."
+                                st.session_state["live_notice"] = "5DollarFootballAPI başarısız oldu: " + str(five_dollar_error)[:220]
+                            elif FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_returned:
+                                st.session_state["live_notice"] = "5DollarFootballAPI yanıt verdi ancak canlı maç listesi boş döndü. ESPN de canlı maç bulamadı; kaynak durumu sekmesini kontrol et."
+                            else:
+                                st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Tarihe göre maçlar sekmesini kullanabilirsin."
                         elif err:
                             err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
         if err:
