@@ -184,8 +184,14 @@ def provider_status_table():
     statuses = st.session_state.get("provider_statuses", {})
     rows = []
     for name, configured in [
-("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
-        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("TheSportsDB", True), ("ESPN", True), ("OpenLigaDB", True)
+        ("API-Football", bool(API_KEY)),
+        ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)),
+        ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)),
+        ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)),
+        ("TheSportsDB", True),
+        ("ESPN", True),
+        ("OpenLigaDB", True),
     ]:
         item = statuses.get(name, {})
         ok = item.get("ok")
