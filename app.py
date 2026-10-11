@@ -165,6 +165,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
 API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
+BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
 
 # Provider health is session-local; never display credentials.
 def set_provider_status(name, configured, ok=None, detail=None):
@@ -182,7 +183,7 @@ def provider_status_table():
     rows = []
     for name, configured in [
         ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
-        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
+        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
     ]:
         item = statuses.get(name, {})
         ok = item.get("ok")
@@ -195,7 +196,7 @@ def provider_status_table():
 
 for _name, _configured in [
     ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
-    ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
+    ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
 ]:
     set_provider_status(_name, _configured)
 
@@ -445,6 +446,68 @@ def merge_fixture_sources(primary, supplemental):
             merged.append(item)
             seen.add(key)
     return merged
+
+@st.cache_data(ttl=45, show_spinner=False)
+def bsd_live_matches():
+    """Optional Bzzoiro Sports Data live-score provider; requires BSD_API_TOKEN."""
+    if not BSD_API_TOKEN:
+        return None, "BSD_API_TOKEN tanımlı değil; Bzzoiro kayıt anahtarı gerekiyor."
+    try:
+        response = requests.get(
+            "https://sports.bzzoiro.com/api/v2/events/live/",
+            headers={"Authorization": f"Token {BSD_API_TOKEN}"},
+            params={"limit": 100}, timeout=15
+        )
+        if response.status_code != 200:
+            message = f"Bzzoiro HTTP {response.status_code}: {response.text[:160]}"
+            set_provider_status("Bzzoiro Sports Data", True, False, message)
+            return None, message
+        payload = response.json()
+        items = payload.get("results", payload.get("data", [])) if isinstance(payload, dict) else payload
+        if isinstance(items, dict):
+            items = items.get("results", items.get("events", []))
+        normalized = []
+        for item in items or []:
+            home_obj = item.get("home_team") or item.get("home") or item.get("homeTeam") or {}
+            away_obj = item.get("away_team") or item.get("away") or item.get("awayTeam") or {}
+            home = home_obj.get("name") or home_obj.get("team_name") or home_obj.get("display_name") if isinstance(home_obj, dict) else home_obj
+            away = away_obj.get("name") or away_obj.get("team_name") or away_obj.get("display_name") if isinstance(away_obj, dict) else away_obj
+            if not home or not away:
+                participants = item.get("participants") or []
+                for part in participants:
+                    role = str(part.get("role") or part.get("location") or part.get("position") or "").lower()
+                    name = part.get("name") or part.get("team_name")
+                    if name and role in ("home", "1", "local"):
+                        home = name
+                    elif name and role in ("away", "2", "visitor"):
+                        away = name
+            if not home or not away:
+                continue
+            score = item.get("score") or item.get("scores") or {}
+            if isinstance(score, list):
+                score_map = {str(x.get("side") or x.get("team") or x.get("role") or "").lower(): x.get("score", x.get("goals")) for x in score if isinstance(x, dict)}
+                gh = score_map.get("home", score_map.get("1"))
+                ga = score_map.get("away", score_map.get("2"))
+            else:
+                gh = score.get("home", score.get("home_score", score.get("home_goals")))
+                ga = score.get("away", score.get("away_score", score.get("away_goals")))
+            status = str(item.get("status") or item.get("state") or "LIVE").lower()
+            short = "HT" if "half" in status else ("FT" if "finish" in status else "LIVE")
+            normalized.append({
+                "fixture": {"id": f"bsd-{item.get('id', item.get('event_id', len(normalized)))}",
+                            "date": item.get("start_time") or item.get("kickoff") or item.get("date"),
+                            "status": {"long": status, "short": short, "elapsed": item.get("current_minute") or item.get("minute")}},
+                "teams": {"home": {"name": str(home)}, "away": {"name": str(away)}},
+                "goals": {"home": gh, "away": ga},
+                "league": {"name": (item.get("league") or {}).get("name", "Bzzoiro") if isinstance(item.get("league"), dict) else str(item.get("league") or "Bzzoiro"), "country": ""},
+                "_source": "Bzzoiro Sports Data"
+            })
+        set_provider_status("Bzzoiro Sports Data", True, True, f"HTTP 200; {len(normalized)} canlı maç normalize edildi.")
+        return normalized, None
+    except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+        message = f"Bzzoiro bağlantı/yanıt hatası: {exc}"
+        set_provider_status("Bzzoiro Sports Data", True, False, message[:180])
+        return None, message
 
 @st.cache_data(ttl=45, show_spinner=False)
 def sportmonks_live_matches():
@@ -1325,21 +1388,27 @@ with live_tab:
                 elif sm_err:
                     set_provider_status("Sportmonks", True, False, "Tamamlayıcı kaynak kullanılamadı; ana kaynak korunuyor.")
             if not data and (err or quota_exhausted):
-                espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
-                live_espn = [m for m in espn_data if m.get("fixture", {}).get("status", {}).get("short") in ("LIVE", "HT")]
-                if live_espn:
-                    data = live_espn
-                    err = None
-                    source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
-                    st.session_state["live_notice"] = "API-Football ana kaynağı yanıt vermedi; seçili liglerin canlı skorları ESPN üzerinden gösteriliyor."
-                elif not espn_err:
-                    # ESPN answered successfully but no supported competition is live right now.
-                    data = []
-                    err = None
-                    source = "ESPN açık skor panoları"
-                    st.session_state["live_notice"] = "API-Football kotası/bağlantısı kullanılamadı. ESPN yedeği yanıt verdi ancak desteklenen liglerde şu an canlı maç yok."
-                elif err:
-                    err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
+                if BSD_API_TOKEN:
+                    bsd_data, bsd_err = bsd_live_matches()
+                    if not bsd_err:
+                        data = bsd_data or []
+                        err = None
+                        source = "Bzzoiro Sports Data"
+                if not data:
+                    espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
+                    live_espn = [m for m in espn_data if m.get("fixture", {}).get("status", {}).get("short") in ("LIVE", "HT")]
+                    if live_espn:
+                        data = live_espn
+                        err = None
+                        source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
+                        st.session_state["live_notice"] = "Ana kaynaklar yanıt vermedi; seçili liglerin canlı skorları ESPN üzerinden gösteriliyor."
+                    elif not espn_err:
+                        data = []
+                        err = None
+                        source = "ESPN açık skor panoları"
+                        st.session_state["live_notice"] = "Ana kaynaklar kullanılamadı. ESPN yedeği yanıt verdi ancak desteklenen liglerde şu an canlı maç yok."
+                    elif err:
+                        err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
         if err:
             st.error(err)
         else:
@@ -1400,8 +1469,8 @@ with source_tab:
     provider_status_table()
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
-    st.write("- API-Football kota/bağlantı hatasında Sportmonks denenir; ana kaynak da boşsa seçili liglerde ESPN yedeği denenir.")
-    st.write("- football-data.org, OpenLigaDB ve ESPN tamamlayıcı fikstür kaynaklarıdır; her biri tüm dünya liglerini, canlı istatistikleri veya oranları kapsamaz.")
+    st.write("- API-Football kota/bağlantı hatasında Sportmonks, BSD_API_TOKEN tanımlıysa Bzzoiro, ardından seçili liglerde ESPN denenir.")
+    st.write("- football-data.org, OpenLigaDB ve ESPN tamamlayıcı kaynaklardır. Bzzoiro Sports Data için BSD_API_TOKEN gerekir; ücretsiz hesap açılabilir. Hiçbiri tek başına tüm lig ve veri türlerini garanti etmez.")
     st.write("- Sağlayıcı kotası kodla artırılamaz. Tüm kaynaklar sınırına ulaşırsa veri gecikebilir veya bulunamayabilir.")
     if st.button("Kaynak durumlarını sıfırla", key="reset_provider_status"):
         st.session_state["provider_statuses"] = {}
@@ -1419,6 +1488,6 @@ with info_tab:
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
-- Ek fikstür kaynakları: football-data.org (token ve plan kapsamına bağlı) ve OpenLigaDB (Almanya Bundesliga / 2. Bundesliga). Bu kaynaklar tarih fikstürünü genişletir; küresel canlı istatistik veya bahis oranı sağlamaz.
+- Ek kaynaklar: football-data.org, OpenLigaDB, ESPN ve isteğe bağlı Bzzoiro Sports Data (BSD_API_TOKEN). Bu kaynaklar tarih fikstürünü genişletir; küresel canlı istatistik veya bahis oranı sağlamaz.
 - Sportmonks ücretsiz planı sınırlı lig kapsamındadır; API-Football ücretsiz paketi günlük 100 istekle sınırlıdır. Kaynakları birleştirmek bu limitleri kaldırmaz. Sportmonks canlı oran erişimi ücretsiz planda açık olmayabilir. Haber özeti, herkese açık RSS başlıklarını anahtar-sözcüklerle sınıflandırır; tüm interneti veya sosyal medyayı kapsamaz. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
