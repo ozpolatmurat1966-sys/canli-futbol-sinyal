@@ -190,6 +190,7 @@ def provider_status_table():
         ("football-data.org", bool(FOOTBALL_DATA_TOKEN)),
         ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)),
         ("SportScore", True),
+        ("OpenFootAPI", True),
         ("TheSportsDB", True),
         ("ESPN", True),
         ("OpenLigaDB", True),
@@ -734,6 +735,77 @@ def sportscore_live_matches():
     except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
         message = f"SportScore bağlantı/yanıt hatası: {exc}"
         set_provider_status("SportScore", True, False, message[:180])
+        return None, message
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def openfootapi_live_matches():
+    """OpenFootAPI live fixtures. Uses a private Streamlit secret when configured, public demo key otherwise."""
+    token = str(st.secrets.get("OPENFOOT_API_KEY", "") or "").strip()
+    if not token:
+        token = "of_demo_openfootapi_docs"
+    try:
+        response = requests.get(
+            "https://openfootapi.com/v1/matches",
+            params={"date": date.today().isoformat(), "status": "live"},
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            payload_text = response.text[:160]
+            message = f"OpenFootAPI HTTP {response.status_code}: {payload_text}"
+            set_provider_status("OpenFootAPI", True, False, message)
+            return None, message
+        payload = response.json()
+        items = payload.get("data", []) if isinstance(payload, dict) else []
+        if not isinstance(items, list):
+            items = []
+        normalized = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            status_raw = str(item.get("status") or "unknown").strip()
+            status_lower = status_raw.lower()
+            if status_lower == "live":
+                short = "LIVE"
+            elif status_lower in ("ht", "half-time", "halftime", "paused"):
+                short = "HT"
+            else:
+                continue
+            home_obj = item.get("homeTeam") or {}
+            away_obj = item.get("awayTeam") or {}
+            home = home_obj.get("name") if isinstance(home_obj, dict) else str(home_obj)
+            away = away_obj.get("name") if isinstance(away_obj, dict) else str(away_obj)
+            if not home or not away:
+                continue
+            score = item.get("score") or item.get("scores") or {}
+            if not isinstance(score, dict):
+                score = {}
+            home_score = score.get("home", score.get("homeScore", item.get("homeScore")))
+            away_score = score.get("away", score.get("awayScore", item.get("awayScore")))
+            if home_score is None and isinstance(item.get("home"), dict):
+                home_score = item["home"].get("score", item["home"].get("goals"))
+            if away_score is None and isinstance(item.get("away"), dict):
+                away_score = item["away"].get("score", item["away"].get("goals"))
+            competition = item.get("competition") or {}
+            competition_name = competition.get("name") if isinstance(competition, dict) else str(competition)
+            normalized.append({
+                "fixture": {"id": item.get("id"), "date": item.get("kickoffAt"),
+                            "status": {"long": status_raw, "short": short,
+                                       "elapsed": item.get("minute", item.get("elapsedMinute"))}},
+                "teams": {"home": {"id": home_obj.get("id") if isinstance(home_obj, dict) else None, "name": str(home), "logo": home_obj.get("logo") if isinstance(home_obj, dict) else None},
+                          "away": {"id": away_obj.get("id") if isinstance(away_obj, dict) else None, "name": str(away), "logo": away_obj.get("logo") if isinstance(away_obj, dict) else None}},
+                "goals": {"home": home_score, "away": away_score},
+                "league": {"id": item.get("competitionId"), "name": competition_name or "OpenFootAPI", "country": ""},
+                "_source": "OpenFootAPI", "source": "OpenFootAPI", "_raw_openfootapi": item
+            })
+        meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
+        plan = ((meta.get("access") or {}).get("plan") if isinstance(meta, dict) else None) or "bilinmiyor"
+        set_provider_status("OpenFootAPI", True, True, f"HTTP 200; {len(items)} kayıt, {len(normalized)} canlı kayıt; plan: {plan}.")
+        return normalized, None
+    except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+        message = f"OpenFootAPI bağlantı/yanıt hatası: {exc}"
+        set_provider_status("OpenFootAPI", True, False, message[:180])
         return None, message
 
 
@@ -1824,6 +1896,15 @@ with live_tab:
                             source = "SportScore canlı skorları"
                             st.session_state["live_notice"] = "Canlı skorlar SportScore üzerinden gösteriliyor. Kaynak kapsamı ve güncelleme sıklığı sağlayıcıya bağlıdır."
                     if not data:
+                        of_data, of_err = openfootapi_live_matches()
+                        live_diagnostics.append({"Kaynak": "OpenFootAPI", "Alınan kayıt": len(of_data or []) if not of_err else "—", "Canlı filtresinden geçen": len(of_data or []) if not of_err else "—", "Not": of_err or "Bugünün fikstüründe status=live"})
+                        st.session_state["live_diagnostics"] = live_diagnostics
+                        if of_data:
+                            data = of_data
+                            err = None
+                            source = "OpenFootAPI canlı skorları"
+                            st.session_state["live_notice"] = "OpenFootAPI canlı maçları gösteriliyor. Ücretsiz demo erişimi sınırlıdır; daha geniş erişim için OPENFOOT_API_KEY sırrı eklenebilir."
+                    if not data:
                         espn_data, espn_err = espn_matches_for_date(today_text)
                         # ESPN can occasionally leave an old event marked as in progress.
                         # Only show plausible live matches kicked off within the last five hours.
@@ -1909,7 +1990,7 @@ with live_tab:
 
     if st.session_state.get("live_notice"):
         st.info(st.session_state["live_notice"])
-    st.markdown('Veri sağlayıcısı: <a href="https://sportscore.com/" target="_blank" rel="dofollow">Powered by SportScore</a>', unsafe_allow_html=True)
+    st.markdown('Veri sağlayıcıları: <a href="https://sportscore.com/" target="_blank" rel="dofollow">SportScore</a> · <a href="https://openfootapi.com/docs" target="_blank" rel="dofollow">OpenFootAPI</a>', unsafe_allow_html=True)
     if st.session_state.get("live_diagnostics"):
         with st.expander("🔎 Canlı veri teşhisi — kaynak kaynak kayıt sayıları", expanded=True):
             st.dataframe(st.session_state["live_diagnostics"], use_container_width=True, hide_index=True)
