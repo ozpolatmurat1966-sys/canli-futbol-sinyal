@@ -2492,28 +2492,34 @@ def show_matches(matches, prefix):
             is_sportmonks = match.get("_source") == "Sportmonks"
             is_thesportsdb = match.get("_source") == "TheSportsDB"
             is_openfootapi = match.get("_source") == "OpenFootAPI"
+            source_name = match.get("_source") or match.get("source") or ""
+            capabilities = {
+                "Sportmonks": {"stats", "lineup", "odds"},
+                "APIFootball.com": {"stats", "lineup", "odds", "players"},
+                "TheSportsDB": {"stats", "lineup"},
+                "5DollarFootballAPI": {"stats", "odds"},
+                "API-Football": {"stats", "lineup", "odds", "players"} if API_KEY else set(),
+            }.get(source_name, set())
             c1, c2, c3, c4, c5, c6 = st.columns(6)
-            if is_openfootapi:
-                # This source has no match details, but ESPN may still provide recent form.
-                for state_key in (f"stats_{fid}", f"lineup_{fid}", f"odds_{fid}", f"analyze_{fid}", f"players_{fid}"):
+            # Render only actions that this source actually supports; form is a separate ESPN lookup.
+            for capability, state_key in (("stats", f"stats_{fid}"), ("lineup", f"lineup_{fid}"),
+                                           ("odds", f"odds_{fid}"), ("players", f"players_{fid}")):
+                if capability not in capabilities:
                     st.session_state.pop(state_key, None)
-                if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
-                    st.session_state[f"form_{fid}"] = True
-            else:
-                if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
-                    st.session_state[f"stats_{fid}"] = True
-                if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
-                    st.session_state[f"lineup_{fid}"] = True
-                if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
-                    st.session_state[f"odds_{fid}"] = True
-                if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
-                    st.session_state[f"stats_{fid}"] = True
-                    st.session_state[f"odds_{fid}"] = True
-                    st.session_state[f"analyze_{fid}"] = True
-                if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
-                    st.session_state[f"players_{fid}"] = True
-                if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
-                    st.session_state[f"form_{fid}"] = True
+            if "stats" in capabilities and c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
+                st.session_state[f"stats_{fid}"] = True
+            if "lineup" in capabilities and c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
+                st.session_state[f"lineup_{fid}"] = True
+            if "odds" in capabilities and c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
+                st.session_state[f"odds_{fid}"] = True
+            if {"stats", "odds"}.issubset(capabilities) and c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
+                st.session_state[f"stats_{fid}"] = True
+                st.session_state[f"odds_{fid}"] = True
+                st.session_state[f"analyze_{fid}"] = True
+            if "players" in capabilities and c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
+                st.session_state[f"players_{fid}"] = True
+            if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
+                st.session_state[f"form_{fid}"] = True
             if is_openfootapi:
                 st.caption("OpenFootAPI bu maçta yalnızca canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran işlemleri bu kaynakta desteklenmiyor.")
             elif is_sportmonks:
@@ -2530,14 +2536,20 @@ def show_matches(matches, prefix):
                         st.json(payload)
                     else:
                         st.info("Bu maç için TheSportsDB olay akışı yok.")
-            elif match.get("_source") not in (None, "API-Football", "Sportmonks", "OpenFootAPI"):
+            elif match.get("_source") not in (None, "API-Football", "Sportmonks", "OpenFootAPI", "5DollarFootballAPI", "APIFootball.com"):
                 st.caption(f"Bu maçın fikstür kaynağı: {match.get('_source')}. Bu kaynağın maç ID'si API-Football ID'si olmadığı için API-Football istatistik/oran uç noktalarıyla sorgulanmaz. Gelişmiş istatistik için destekleyen bir sağlayıcıdaki eşleşmiş maçı kullan.")
             if not is_openfootapi and st.button("Kaynak uygunluğunu kontrol et", key=f"{prefix}_diag_{fid}"):
                 current_source = match.get("_source") or match.get("source") or "Bilinmeyen kaynak"
                 if current_source == "Sportmonks":
-                    st.info("Sportmonks istatistikleri yukarıdaki istatistik düğmesinden sorgulanır.")
+                    st.info("Sportmonks istatistikleri/kadrosu maç kimliğiyle, oranları ayrı canlı oran uç noktasıyla sorgulanır; paket kapsamı geçerlidir.")
+                elif current_source == "5DollarFootballAPI":
+                    st.info("5DollarFootballAPI bu uygulamada istatistik ve Bet365 oranları için kullanılır. Ücretsiz kapsam ilk 5 ligle sınırlıdır; kadro ve oyuncu maç istatistiği bağlı değil.")
+                elif current_source == "TheSportsDB":
+                    st.info("TheSportsDB istatistik ve kadro uç noktaları bağlandı; veri yalnızca sağlayıcıda ilgili maç için varsa döner. Bu kaynak oran sağlamaz.")
+                elif current_source == "APIFootball.com":
+                    st.info("APIFootball.com istatistik, kadro, oran ve oyuncu maç istatistiği uç noktaları sorgulanabilir; sonuç hesap kapsamına bağlıdır.")
                 else:
-                    st.info(f"{current_source} için eski API istatistik uç noktası çağrılmaz; kaynak yalnızca desteklediği verileri sağlar.")
+                    st.info(f"{current_source} için maç istatistiği/kadro/oran uç noktası uygulamaya bağlı değil; form için ESPN eşleştirmesi denenebilir.")
             if st.session_state.get(f"form_{fid}"):
                 show_team_form_for_match(match)
             stats = None
