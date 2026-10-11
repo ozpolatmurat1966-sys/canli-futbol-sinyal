@@ -2110,21 +2110,20 @@ def show_matches(matches, prefix):
             is_sportmonks = match.get("_source") == "Sportmonks"
             is_thesportsdb = match.get("_source") == "TheSportsDB"
             is_openfootapi = match.get("_source") == "OpenFootAPI"
-            if is_openfootapi:
-                # Clear any old button state from before unsupported actions were disabled.
-                for state_key in (f"stats_{fid}", f"lineup_{fid}", f"odds_{fid}", f"analyze_{fid}", f"players_{fid}"):
-                    st.session_state.pop(state_key, None)
-            if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}", disabled=is_openfootapi):
+            # Do not clear action state during every rerun: doing so cancels the click
+            # before the requested result can render. Keep buttons clickable for all
+            # sources; each detail function performs its own source-capability check.
+            if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
-            if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}", disabled=is_openfootapi):
+            if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
                 st.session_state[f"lineup_{fid}"] = True
-            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}", disabled=is_openfootapi):
+            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
                 st.session_state[f"odds_{fid}"] = True
-            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}", disabled=is_openfootapi):
+            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
                 st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
-            if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}", disabled=is_openfootapi):
+            if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
                 st.session_state[f"players_{fid}"] = True
             if is_openfootapi:
                 st.caption("OpenFootAPI bu maçta yalnızca desteklediği canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran uç noktaları olmadığı için bu işlemler devre dışıdır.")
