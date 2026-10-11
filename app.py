@@ -2109,19 +2109,26 @@ def show_matches(matches, prefix):
             c1, c2, c3, c4, c5 = st.columns(5)
             is_sportmonks = match.get("_source") == "Sportmonks"
             is_thesportsdb = match.get("_source") == "TheSportsDB"
-            if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
+            is_openfootapi = match.get("_source") == "OpenFootAPI"
+            if is_openfootapi:
+                # Clear any old button state from before unsupported actions were disabled.
+                for state_key in (f"stats_{fid}", f"lineup_{fid}", f"odds_{fid}", f"analyze_{fid}", f"players_{fid}"):
+                    st.session_state.pop(state_key, None)
+            if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}", disabled=is_openfootapi):
                 st.session_state[f"stats_{fid}"] = True
-            if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
+            if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}", disabled=is_openfootapi):
                 st.session_state[f"lineup_{fid}"] = True
-            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
+            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}", disabled=is_openfootapi):
                 st.session_state[f"odds_{fid}"] = True
-            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
+            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}", disabled=is_openfootapi):
                 st.session_state[f"stats_{fid}"] = True
                 st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
-            if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
+            if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}", disabled=is_openfootapi):
                 st.session_state[f"players_{fid}"] = True
-            if is_sportmonks:
+            if is_openfootapi:
+                st.caption("OpenFootAPI bu maçta yalnızca desteklediği canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran uç noktaları olmadığı için bu işlemler devre dışıdır.")
+            elif is_sportmonks:
                 st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
             elif is_thesportsdb:
                 tsdb_event_id = str(fid).replace("tsdb-", "", 1)
@@ -2154,9 +2161,9 @@ def show_matches(matches, prefix):
                         st.json(payload)
                     else:
                         st.info("Bu maç için TheSportsDB olay akışı yok.")
-            elif match.get("_source") not in (None, "API-Football", "Sportmonks"):
-                st.caption(f"Bu maçın fikstür kaynağı: {match.get('_source')}. Bu kaynağın maç ID'si API-Football ID'si olmadığı için API-Football istatistik/oran uç noktalarıyla sorgulanmaz. Gelişmiş istatistik için API-Football/Sportmonks kaynağındaki eşleşmiş maçı kullan.")
-            if st.button("Kaynak uygunluğunu kontrol et", key=f"{prefix}_diag_{fid}"):
+            elif match.get("_source") not in (None, "API-Football", "Sportmonks", "OpenFootAPI"):
+                st.caption(f"Bu maçın fikstür kaynağı: {match.get('_source')}. Bu kaynağın maç ID'si API-Football ID'si olmadığı için API-Football istatistik/oran uç noktalarıyla sorgulanmaz. Gelişmiş istatistik için destekleyen bir sağlayıcıdaki eşleşmiş maçı kullan.")
+            if not is_openfootapi and st.button("Kaynak uygunluğunu kontrol et", key=f"{prefix}_diag_{fid}"):
                 current_source = match.get("_source") or match.get("source") or "Bilinmeyen kaynak"
                 if current_source == "Sportmonks":
                     st.info("Sportmonks istatistikleri yukarıdaki istatistik düğmesinden sorgulanır.")
