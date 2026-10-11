@@ -686,6 +686,43 @@ def merge_fixture_sources(primary, supplemental):
             seen.add(key)
     return merged
 
+def find_other_source_matches(match):
+    """Find the same fixture in other configured live feeds; only return provider-backed IDs."""
+    teams = match.get("teams") or {}
+    home = (teams.get("home") or {}).get("name") or ""
+    away = (teams.get("away") or {}).get("name") or ""
+    wanted = {normalize_team_key(home), normalize_team_key(away)}
+    if not all(wanted):
+        return [], "Takım adları eşleştirme için eksik."
+
+    # Reuse the app's existing provider fallback chain and its short-lived caches.
+    candidates = merge_live_match_feeds([])
+    original_source = match.get("_source") or match.get("source")
+    found = []
+    seen = set()
+    for candidate in candidates or []:
+        source = candidate.get("_source") or candidate.get("source")
+        if not source or source == original_source:
+            continue
+        candidate_teams = candidate.get("teams") or {}
+        names = {
+            normalize_team_key((candidate_teams.get("home") or {}).get("name")),
+            normalize_team_key((candidate_teams.get("away") or {}).get("name")),
+        }
+        # Require both teams to match (home/away order may differ); avoid fuzzy guesses.
+        if names != wanted:
+            continue
+        fixture_id = (candidate.get("fixture") or {}).get("id")
+        if fixture_id in (None, ""):
+            continue
+        key = (source, str(fixture_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(candidate)
+    return found, None
+
+
 def merge_live_match_feeds(base_matches):
     """Combine configured live feeds and deduplicate by team names without inventing scores."""
     combined = list(base_matches or [])
@@ -2521,7 +2558,70 @@ def show_matches(matches, prefix):
             if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
                 st.session_state[f"form_{fid}"] = True
             if is_openfootapi:
-                st.caption("OpenFootAPI bu maçta yalnızca canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran işlemleri bu kaynakta desteklenmiyor.")
+                if st.button("🔎 Maçı diğer kaynaklarda ara", key=f"{prefix}_cross_source_{fid}"):
+                    with st.spinner("Aynı maç diğer canlı veri kaynaklarında aranıyor..."):
+                        alternatives, match_error = find_other_source_matches(match)
+                    st.session_state[f"cross_source_matches_{fid}"] = alternatives or []
+                    st.session_state[f"cross_source_error_{fid}"] = match_error
+                if st.session_state.get(f"cross_source_matches_{fid}") is not None:
+                    alternatives = st.session_state.get(f"cross_source_matches_{fid}") or []
+                    match_error = st.session_state.get(f"cross_source_error_{fid}")
+                    if match_error:
+                        st.warning(match_error)
+                    elif alternatives:
+                        st.success(f"Aynı iki takımı eşleştiren {len(alternatives)} alternatif kayıt bulundu.")
+                        for alternative in alternatives:
+                            alt_source = alternative.get("_source") or alternative.get("source") or "Bilinmeyen kaynak"
+                            alt_fixture = alternative.get("fixture") or {}
+                            alt_status = alt_fixture.get("status") or {}
+                            alt_teams = alternative.get("teams") or {}
+                            alt_goals = alternative.get("goals") or {}
+                            st.markdown(
+                                f"**{alt_source}:** "
+                                f"{(alt_teams.get('home') or {}).get('name', 'Ev sahibi')} "
+                                f"{alt_goals.get('home', '—')}–{alt_goals.get('away', '—')} "
+                                f"{(alt_teams.get('away') or {}).get('name', 'Deplasman')} · "
+                                f"{alt_status.get('elapsed') or '—'}'"
+                            )
+                            st.caption("Bu eşleşme takım adlarının tam normalize edilmiş karşılaştırmasına dayanır; maç kimliği ilgili sağlayıcıya aittir.")
+                            if st.button(f"{alt_source} verilerini aç", key=f"{prefix}_cross_open_{fid}_{alt_source}_{alt_fixture.get('id')}"):
+                                st.session_state[f"cross_source_selected_{fid}"] = alternative
+                        selected_alternative = st.session_state.get(f"cross_source_selected_{fid}")
+                        if selected_alternative:
+                            selected_source = selected_alternative.get("_source") or selected_alternative.get("source")
+                            selected_id = (selected_alternative.get("fixture") or {}).get("id")
+                            if selected_source in ("5DollarFootballAPI", "Sportmonks", "APIFootball.com", "API-Football", "TheSportsDB"):
+                                selected_capabilities = {
+                                    "5DollarFootballAPI": ("stats", "odds"),
+                                    "Sportmonks": ("stats", "lineup", "odds"),
+                                    "APIFootball.com": ("stats", "lineup", "odds", "players"),
+                                    "API-Football": ("stats", "lineup", "odds", "players"),
+                                    "TheSportsDB": ("stats", "lineup"),
+                                }.get(selected_source, ())
+                                actions = st.columns(4)
+                                if "stats" in selected_capabilities and actions[0].button("Eşleşen maç: istatistik", key=f"{prefix}_cross_stats_{fid}"):
+                                    st.session_state[f"cross_stats_{fid}"] = True
+                                if "lineup" in selected_capabilities and actions[1].button("Eşleşen maç: kadro", key=f"{prefix}_cross_lineup_{fid}"):
+                                    st.session_state[f"cross_lineup_{fid}"] = True
+                                if "odds" in selected_capabilities and actions[2].button("Eşleşen maç: oran", key=f"{prefix}_cross_odds_{fid}"):
+                                    st.session_state[f"cross_odds_{fid}"] = True
+                                if {"stats", "odds"}.issubset(selected_capabilities) and actions[3].button("Eşleşen maçı analiz et", key=f"{prefix}_cross_analyze_{fid}"):
+                                    st.session_state[f"cross_analyze_{fid}"] = True
+                                if st.session_state.get(f"cross_stats_{fid}"):
+                                    show_stats(selected_id, selected_alternative)
+                                if st.session_state.get(f"cross_lineup_{fid}"):
+                                    show_lineups(selected_id, selected_alternative)
+                                if st.session_state.get(f"cross_odds_{fid}"):
+                                    show_odds(selected_id, selected_alternative)
+                                if st.session_state.get(f"cross_analyze_{fid}"):
+                                    cross_stats = show_stats(selected_id, selected_alternative)
+                                    cross_odds = show_odds(selected_id, selected_alternative)
+                                    analyze_match(selected_alternative, cross_stats, cross_odds)
+                            else:
+                                st.info(f"{selected_source} bu uygulamada bu maç için istatistik/oran uç noktası sağlamıyor. Eşleşen kaynak kaydı yalnızca kimlik doğrulaması için gösterildi.")
+                    else:
+                        st.info("Diğer etkin canlı kaynaklarda iki takımın adları tam eşleşen bir kayıt bulunamadı. Bu, maçın başka bir sağlayıcıda kesinlikle bulunmadığı anlamına gelmez.")
+                st.caption("OpenFootAPI bu maçta yalnızca canlı skor/fikstür alanlarını sağlar. Diğer kaynakta tam takım eşleşmesi bulunursa o kaynağın kendi maç kimliğiyle desteklenen veriler denenir.")
             elif is_sportmonks:
                 st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
             elif is_thesportsdb:
