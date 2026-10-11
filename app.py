@@ -197,6 +197,52 @@ def sportmonks_live_matches():
     except (requests.RequestException, ValueError) as exc:
         return None, f"Sportmonks bağlantı hatası: {exc}"
 
+def sportmonks_to_api_football(matches):
+    """Normalize Sportmonks livescores to the small schema used by show_matches."""
+    normalized = []
+    for m in matches or []:
+        participants = m.get("participants") or []
+        home = away = None
+        for part in participants:
+            meta = part.get("meta") or {}
+            location = str(meta.get("location", "")).lower()
+            if location == "home":
+                home = part.get("name")
+            elif location == "away":
+                away = part.get("name")
+        if not home and len(participants) > 0:
+            home = participants[0].get("name")
+        if not away and len(participants) > 1:
+            away = participants[1].get("name")
+
+        scores = m.get("scores") or []
+        hg = ag = None
+        for score in scores:
+            description = str(score.get("description", "")).lower()
+            participant_id = score.get("participant_id")
+            score_value = (score.get("score") or {}).get("goals")
+            if score_value is None:
+                continue
+            participant = next((x for x in participants if x.get("id") == participant_id), {})
+            location = str((participant.get("meta") or {}).get("location", "")).lower()
+            if location == "home" and (description in ("current", "2nd-half", "1st-half", "live") or hg is None):
+                hg = score_value
+            elif location == "away" and (description in ("current", "2nd-half", "1st-half", "live") or ag is None):
+                ag = score_value
+        state = m.get("state") or {}
+        state_name = state.get("name") or state.get("short_name") or "Canlı"
+        minute = m.get("minute")
+        normalized.append({
+            "fixture": {"id": m.get("id"), "date": m.get("starting_at"),
+                        "status": {"long": state_name, "short": state.get("short_name"), "elapsed": minute}},
+            "teams": {"home": {"name": home or "Ev sahibi"}, "away": {"name": away or "Deplasman"}},
+            "goals": {"home": hg, "away": ag},
+            "league": {"name": (m.get("league") or {}).get("name", "Sportmonks ligi"),
+                       "country": (m.get("league") or {}).get("country", {}).get("name", "") if isinstance((m.get("league") or {}).get("country"), dict) else ""},
+            "_source": "Sportmonks"
+        })
+    return normalized
+
 def sportmonks_find_match(home_name, away_name):
     matches, err = sportmonks_live_matches()
     if err or not matches:
@@ -718,16 +764,19 @@ def show_matches(matches, prefix):
             st.write(f"**Durum:** {tr_status(status.get('long', status.get('short')))}")
             show_match_news(home, away, fid)
             c1, c2, c3, c4 = st.columns(4)
+            is_sportmonks = match.get("_source") == "Sportmonks"
             if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
             if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
                 st.session_state[f"lineup_{fid}"] = True
-            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
+            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}", disabled=is_sportmonks):
                 st.session_state[f"odds_{fid}"] = True
-            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
+            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}", disabled=is_sportmonks):
                 st.session_state[f"stats_{fid}"] = True
                 st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
+            if is_sportmonks:
+                st.caption("Bu maç Sportmonks yedek kaynağından geldi. İstatistik/kadro denenebilir; API-Football maç ID'si olmadığı için oran ve birleşik analiz düğmeleri kapalıdır.")
             if st.button("API yanıtını kontrol et", key=f"{prefix}_diag_{fid}"):
                 with st.spinner("İstatistik API yanıtı kontrol ediliyor..."):
                     diag_data, diag_err, diag_payload = api_get("fixtures/statistics", {"fixture": fid})
@@ -760,9 +809,25 @@ with live_tab:
     if st.button("Canlı maçları yükle / yenile"):
         with st.spinner("Canlı maçlar yükleniyor..."):
             data, err, _ = api_get("fixtures", {"live": "all"})
-        if err: st.error(err)
-        else: st.session_state["live_matches"] = data
+            source = "API-Football"
+            if err and ("429" in err or "rateLimit" in err or "daily request limit" in err.lower()):
+                if SPORTMONKS_API_TOKEN:
+                    sm_data, sm_err = sportmonks_live_matches()
+                    if not sm_err and sm_data:
+                        data = sportmonks_to_api_football(sm_data)
+                        err = None
+                        source = "Sportmonks (ücretsiz lig kapsamı sınırlı)"
+                    elif sm_err:
+                        err = f"API-Football günlük limitini doldurdu. Sportmonks yedeği de kullanılamadı: {sm_err}"
+                    else:
+                        err = "API-Football günlük limiti dolu; Sportmonks şu anda canlı maç döndürmedi. Ücretsiz kapsam sınırlıdır."
+        if err:
+            st.error(err)
+        else:
+            st.session_state["live_matches"] = data
+            st.session_state["live_source"] = source
     if "live_matches" in st.session_state:
+        st.caption("Canlı veri kaynağı: " + st.session_state.get("live_source", "API-Football"))
         show_matches(st.session_state["live_matches"], "live")
     else:
         st.info("Canlı maçları görmek için yukarıdaki düğmeye basın.")
