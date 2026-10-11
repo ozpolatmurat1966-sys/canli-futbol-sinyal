@@ -1579,7 +1579,8 @@ with live_tab:
                     source = "API-Football + Sportmonks (ek maçlar birleştirildi)"
                 elif sm_err:
                     set_provider_status("Sportmonks", True, False, "Tamamlayıcı kaynak kullanılamadı; ana kaynak korunuyor.")
-            if not data and (err or quota_exhausted):
+            # Empty primary response is also a fallback trigger: a successful HTTP 200 with zero fixtures must not hide other providers.
+            if not data:
                 if BSD_API_TOKEN:
                     bsd_data, bsd_err = bsd_live_matches()
                     if not bsd_err:
