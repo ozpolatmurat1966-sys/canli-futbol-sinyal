@@ -1665,12 +1665,7 @@ with source_tab:
     if st.button("🧪 Bağlantıları şimdi test et", key="test_all_providers"):
         test_rows = []
         with st.spinner("Her kaynağa birer hafif test isteği gönderiliyor..."):
-            # Primary API: one live endpoint request; this consumes provider quota.
-            if API_KEY:
-                _, test_err, _ = api_get("fixtures", {"live": "all"})
-                set_provider_status("API-Football", True, not bool(test_err), (test_err or "Canlı fikstür uç noktası yanıt verdi.")[:180])
-            else:
-                set_provider_status("API-Football", False, False, "API_FOOTBALL_KEY tanımlı değil.")
+            # Eski API-Football devre dışı; bu kaynağa istek gönderilmez.
             if SPORTMONKS_API_TOKEN:
                 _, test_err = sportmonks_live_matches()
                 set_provider_status("Sportmonks", True, not bool(test_err), (test_err or "Canlı skor uç noktası yanıt verdi.")[:180])
