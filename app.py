@@ -1242,6 +1242,45 @@ with st.expander("10 kaynağın bağlantı ve erişim durumu", expanded=True):
         _c2.write(_src["Tür"])
         _c3.caption(_src["access"])
 
+st.caption("Bağlantı testi yalnızca sitenin web adresine erişilebildiğini ölçer; canlı maç/oran API'sinin çalıştığını kanıtlamaz.")
+if st.button("🔎 10 kaynağın bağlantısını test et", key="test_ten_sources"):
+    import pandas as _pd
+    _health_rows = []
+    _progress = st.progress(0, text="Kaynak adresleri kontrol ediliyor...")
+    for _idx, _src in enumerate(SOURCE_CATALOG, start=1):
+        try:
+            _resp = requests.get(
+                _src["url"],
+                headers={"User-Agent": "Mozilla/5.0 (compatible; FootballSourceHealthCheck/1.0)"},
+                timeout=7,
+                allow_redirects=True,
+            )
+            if 200 <= _resp.status_code < 400:
+                _state = "Web adresi erişilebilir"
+            elif _resp.status_code in (401, 403, 429):
+                _state = "Site yanıt verdi; erişim kısıtlı"
+            else:
+                _state = "HTTP yanıtı: kontrol gerekli"
+            _health_rows.append({
+                "Kaynak": _src["Kaynak"], "Web durumu": _state,
+                "HTTP kodu": _resp.status_code, "Son adres": _resp.url,
+                "Canlı API/oran doğrulandı mı?": "Hayır — ayrı doğrulama gerekli",
+            })
+        except requests.RequestException as _exc:
+            _health_rows.append({
+                "Kaynak": _src["Kaynak"], "Web durumu": "Bağlantı kurulamadı / zaman aşımı",
+                "HTTP kodu": "—", "Son adres": _src["url"],
+                "Canlı API/oran doğrulandı mı?": "Hayır — ayrı doğrulama gerekli",
+            })
+        _progress.progress(_idx / len(SOURCE_CATALOG), text=f"Kontrol: {_src['Kaynak']} ({_idx}/{len(SOURCE_CATALOG)})")
+    st.session_state["source_hub_health"] = _health_rows
+    _progress.empty()
+    st.success("Web adresi kontrolü tamamlandı. Bu sonuçlar canlı veri API'si erişimiyle aynı şey değildir.")
+
+if "source_hub_health" in st.session_state:
+    st.dataframe(_pd.DataFrame(st.session_state["source_hub_health"]), use_container_width=True, hide_index=True)
+    st.caption("HTTP 200 almak, maç verilerinin otomatik çekilebildiği anlamına gelmez. Veri entegrasyonu için izinli API veya doğrulanmış veri akışı gerekir.")
+
 st.subheader("Oranları tek tabloda birleştirmek için veri içe aktar")
 st.write("Kaynaklardan izinli olarak dışa aktardığın oranları aşağıdaki sütunlarla CSV biçiminde yapıştırabilirsin. Bu alan, site verisini kendiliğinden çekmez; girilen kayıtları normalize edip aynı tabloda gösterir.")
 st.code("kaynak,mac,market,secim,oran,zaman\\nNesine,Galatasaray - Fenerbahçe,1X2,1,2.10,2026-10-11 20:00", language="csv")
