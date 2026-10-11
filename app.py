@@ -1247,6 +1247,15 @@ with live_tab:
                     source = "API-Football + Sportmonks (Sportmonks ücretsiz lig kapsamı sınırlı)"
                 else:
                     err = "API-Football kotası dolu ve SPORTMONKS_API_TOKEN tanımlı değil. Streamlit Secrets bölümündeki anahtar adını kontrol et."
+            if not data:
+                espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
+                live_espn = [m for m in espn_data if m.get("fixture", {}).get("status", {}).get("short") in ("LIVE", "HT")]
+                if live_espn:
+                    data = live_espn
+                    err = None
+                    source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
+                elif espn_err and err:
+                    err = str(err) + " | ESPN yedeği: " + espn_err
         if err:
             st.error(err)
         else:
