@@ -284,11 +284,17 @@ def footystats_get(endpoint, params=None):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def footystats_today_matches(date_text):
-    payload, err = footystats_get("todays-matches", {"date": date_text})
+    # FootyStats defaults to UTC and only returns leagues selected in account settings.
+    payload, err = footystats_get("todays-matches", {"date": date_text, "timezone": "Europe/Istanbul"})
     if err or not isinstance(payload, dict):
         return [], err or "FootyStats fikstür yanıtı okunamadı"
     items = payload.get("data") or []
-    return (items if isinstance(items, list) else []), None
+    if not isinstance(items, list):
+        items = []
+    if not items:
+        pager = payload.get("pager") or {}
+        return [], f"HTTP 200; Türkiye saatiyle {date_text} için 0 maç. FootyStats hesabında API Settings bölümünden lig seçimini kontrol et. Sayfalama toplamı: {pager.get(chr(116)+chr(111)+chr(116)+chr(97)+chr(108)+chr(95)+chr(114)+chr(101)+chr(115)+chr(117)+chr(108)+chr(116)+chr(115), 0)}."
+    return items, None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def football_data_get(path, params=None):
