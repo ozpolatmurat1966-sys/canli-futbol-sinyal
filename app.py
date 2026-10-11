@@ -825,6 +825,52 @@ def show_stats(fixture_id, match):
     return {"home_name": home_name, "away_name": away_name,
             "home_rows": data[0].get("statistics", []), "away_rows": data[1].get("statistics", [])}
 
+def show_player_statistics(fixture_id, match=None):
+    """Player-level match statistics from API-Football; never invent missing values."""
+    if match and (match.get("_source") not in (None, "API-Football")):
+        st.info(f"Oyuncu istatistikleri bu fikstür kaynağında doğrudan desteklenmiyor ({match.get('_source')}). API-Football kaynaklı eşleşmiş maçı kullan.")
+        return
+    if not str(fixture_id or "").isdigit():
+        st.info("Oyuncu istatistikleri için API-Football maç kimliği gerekiyor.")
+        return
+    data, err, _ = api_get("fixtures/players", {"fixture": int(fixture_id)})
+    if err:
+        st.warning(f"Oyuncu istatistikleri alınamadı: {err}")
+        return
+    rows = []
+    for team_block in data or []:
+        team_name = (team_block.get("team") or {}).get("name", "Takım")
+        for player_block in team_block.get("players") or []:
+            player = player_block.get("player") or {}
+            stat_list = player_block.get("statistics") or []
+            stat = stat_list[0] if stat_list else {}
+            games = stat.get("games") or {}
+            shots = stat.get("shots") or {}
+            goals = stat.get("goals") or {}
+            passes = stat.get("passes") or {}
+            tackles = stat.get("tackles") or {}
+            duels = stat.get("duels") or {}
+            dribbles = stat.get("dribbles") or {}
+            fouls = stat.get("fouls") or {}
+            cards = stat.get("cards") or {}
+            rows.append({
+                "Takım": team_name, "Oyuncu": player.get("name", "Bilinmiyor"),
+                "Pozisyon": games.get("position"), "Dakika": games.get("minutes"),
+                "Puan": games.get("rating"), "Gol": goals.get("total"),
+                "Asist": goals.get("assists"), "Şut": shots.get("total"),
+                "İsabetli şut": shots.get("on"), "Pas": passes.get("total"),
+                "Pas isabeti": passes.get("accuracy"), "Müdahale": tackles.get("total"),
+                "Düello": duels.get("total"), "Başarılı çalım": dribbles.get("success"),
+                "Faul": fouls.get("committed"), "Sarı kart": cards.get("yellow"),
+                "Kırmızı kart": cards.get("red")
+            })
+    if not rows:
+        st.info("Sağlayıcı bu maç için oyuncu istatistiği döndürmedi. Maç başlamamış veya lig/plan kapsam dışında olabilir.")
+        return
+    st.subheader("Oyuncu bazında maç istatistikleri")
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.caption("Alanlar sağlayıcının yanıtına göre doldurulur; eksik alanlar boş bırakılır.")
+
 def show_lineups(fixture_id, match=None):
     if match and match.get("_source") == "Sportmonks":
         raw = match.get("_sportmonks_raw") or {}
@@ -1412,7 +1458,7 @@ def show_matches(matches, prefix):
             st.write(f"**Başlama:** {fixture.get('date','Bilinmiyor')}")
             st.write(f"**Durum:** {tr_status(status.get('long', status.get('short')))}")
             show_match_news(home, away, fid)
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             is_sportmonks = match.get("_source") == "Sportmonks"
             is_thesportsdb = match.get("_source") == "TheSportsDB"
             if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
@@ -1425,6 +1471,8 @@ def show_matches(matches, prefix):
                 st.session_state[f"stats_{fid}"] = True
                 st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
+            if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
+                st.session_state[f"players_{fid}"] = True
             if is_sportmonks:
                 st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
             elif is_thesportsdb:
@@ -1473,6 +1521,8 @@ def show_matches(matches, prefix):
                         st.json({"results": diag_payload.get("results"), "errors": diag_payload.get("errors"), "response_count": len(diag_data or [])})
             stats = None
             odds = []
+            if st.session_state.get(f"players_{fid}"):
+                show_player_statistics(fid, match)
             if st.session_state.get(f"stats_{fid}"):
                 stats = show_stats(fid, match)
             if st.session_state.get(f"lineup_{fid}"):
