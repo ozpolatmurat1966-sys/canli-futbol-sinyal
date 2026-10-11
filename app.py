@@ -190,7 +190,7 @@ def sportmonks_live_matches():
             "https://api.sportmonks.com/v3/football/livescores",
             params={
                 "api_token": SPORTMONKS_API_TOKEN,
-                "include": "participants;statistics.type;lineups.player;periods;state;scores;odds"
+                "include": "participants;statistics.type;lineups.player;periods;state;scores"
             },
             timeout=20,
         )
@@ -990,7 +990,7 @@ with tr_sources_tab:
     st.markdown("**Sonraki entegrasyon için:** Resmî/izinli oran akışı veya erişilebilir RSS haber akışı bağlandığında kaynak, tarih ve bağlantı bilgileriyle havuz oluşturulabilir. Sosyal medya yorumları ayrı bir bölümde, kaynak ve zaman damgasıyla tutulmalı; tek başına bahis sinyali sayılmamalıdır.")
     st.divider()
     st.subheader("Yedek canlı veri kaynağı: Sportmonks")
-    st.write("Sportmonks canlı maç, olay, istatistik ve kadro alanlarını tek yanıtta sağlayabilir. Ancak ücretsiz planı yalnızca Danimarka Superliga ve İskoçya Premiership ile sınırlıdır; diğer ligler için ücretsiz yedek garanti edilmez.")
+    st.write("Sportmonks canlı maç, olay, istatistik ve kadro alanlarını tek yanıtta sağlayabilir; oranlar ayrı bir uç noktadan alınmalıdır. Ancak ücretsiz planı yalnızca Danimarka Superliga ve İskoçya Premiership ile sınırlıdır; diğer ligler için ücretsiz yedek garanti edilmez.")
     if not SPORTMONKS_API_TOKEN:
         st.info("Sportmonks ücretsiz token'ını aldıktan sonra Streamlit Secrets bölümüne şu satırı ekle: SPORTMONKS_API_TOKEN = \"TOKENIN\"")
     else:
