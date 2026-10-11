@@ -1378,3 +1378,51 @@ if "source_hub_odds_table" in st.session_state:
         st.dataframe(_best_df, use_container_width=True, hide_index=True)
 
 st.info("Bu merkez ilk entegrasyon katmanıdır. 10 sitenin tamamından otomatik canlı veri alındığı iddiasında bulunmaz. Otomatik bağlantılar ancak resmî API, izinli veri akışı veya doğrulanmış erişim sağlandığında etkinleştirilmelidir. Mevcut Sportmonks, API-Football, football-data.org ve OpenLigaDB bağlantıları uygulamanın önceki bölümlerinde ayrı çalışır.")
+
+# Turkish bookmaker odds coverage check through an aggregator API (only if the user has an account/key).
+st.divider()
+st.header("🇹🇷 Türkiye bahis oranı erişim kontrolü")
+st.write("Bu bölüm, doğrudan bahis sitelerini kazımak yerine izinli bir oran API sağlayıcısının kapsama listesinden Nesine, Misli, Bilyoner, Oley ve Tuttur adlarının gerçekten bulunup bulunmadığını kontrol eder. Kapsama listesinde bulunması, her maçta canlı oran olduğu anlamına gelmez.")
+ODDSPAPI_API_KEY = str(secret("ODDSPAPI_API_KEY", "")).strip()
+if not ODDSPAPI_API_KEY:
+    st.warning("OddsPapi anahtarı henüz eklenmedi. Sağlayıcı hesabından API anahtarı alıp Streamlit → Settings → Secrets bölümüne ODDSPAPI_API_KEY adıyla ekleyince kapsama testi etkinleşir. Anahtarı sohbet mesajına yazma.")
+    st.markdown("Dokümantasyon: https://oddspapi.io/tr/docs/get-bookmakers")
+else:
+    if st.button("Beş Türkiye platformunun API kapsamını kontrol et", key="test_tr_bookmaker_coverage"):
+        try:
+            _bp = requests.get("https://api.oddspapi.io/v4/bookmakers", params={"apiKey": ODDSPAPI_API_KEY}, timeout=15)
+            if _bp.status_code == 200:
+                _bdata = _bp.json()
+                if isinstance(_bdata, dict):
+                    _bdata = _bdata.get("bookmakers", _bdata.get("data", []))
+                if not isinstance(_bdata, list):
+                    st.error("API yanıtı beklenen bahis şirketi listesi biçiminde değil.")
+                else:
+                    _targets = {
+                        "Nesine": ["nesine"],
+                        "Misli": ["misli"],
+                        "Bilyoner": ["bilyoner"],
+                        "Oley": ["oley"],
+                        "Tuttur": ["tuttur"],
+                    }
+                    _found = []
+                    _all_names = []
+                    for _item in _bdata:
+                        if not isinstance(_item, dict):
+                            continue
+                        _name = str(_item.get("bookmakerName", _item.get("name", "")))
+                        _slug = str(_item.get("slug", ""))
+                        _all_names.append((_name, _slug, _item.get("liveOdds")))
+                    for _target, _aliases in _targets.items():
+                        _matches = [x for x in _all_names if any(a in (x[0] + " " + x[1]).casefold() for a in _aliases)]
+                        _found.append({"Platform": _target, "API listesinde": "Evet" if _matches else "Hayır", "API adı/slug": ", ".join(f"{x[0]} ({x[1]})" for x in _matches) or "Bulunamadı", "Canlı oran bildirimi": ", ".join(str(x[2]) for x in _matches) or "—"})
+                    st.session_state["tr_bookmaker_coverage"] = _found
+                    st.success(f"Kapsama listesi alındı: {len(_all_names)} bahisçi kaydı. Bu test yalnızca sağlayıcının kataloğunu kontrol eder.")
+            else:
+                st.error(f"OddsPapi HTTP {_bp.status_code}: {_bp.text[:300]}")
+        except Exception as _e:
+            st.error(f"Kapsama kontrolü başarısız: {_e}")
+    if "tr_bookmaker_coverage" in st.session_state:
+        st.dataframe(_pd.DataFrame(st.session_state["tr_bookmaker_coverage"]), use_container_width=True, hide_index=True)
+        st.caption("Bir platform 'Hayır' çıkarsa bu API üzerinden o platforma ait oranı çekemeyiz. 'Evet' çıkması da canlı maç/market verisinin mevcut olduğunu ayrıca doğrulamayı gerektirir.")
+
