@@ -165,6 +165,40 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
 API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
+
+# Provider health is session-local; never display credentials.
+def set_provider_status(name, configured, ok=None, detail=None):
+    statuses = st.session_state.setdefault("provider_statuses", {})
+    previous = statuses.get(name, {})
+    statuses[name] = {
+        "configured": bool(configured),
+        "ok": ok if ok is not None else previous.get("ok"),
+        "detail": detail if detail is not None else previous.get("detail", "Henüz test edilmedi"),
+        "checked_at": datetime.now().strftime("%H:%M:%S") if ok is not None or detail is not None else previous.get("checked_at", "—"),
+    }
+
+def provider_status_table():
+    statuses = st.session_state.get("provider_statuses", {})
+    rows = []
+    for name, configured in [
+        ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
+    ]:
+        item = statuses.get(name, {})
+        ok = item.get("ok")
+        state = ("Hazır — henüz test edilmedi" if configured and ok is None else
+                 "Yanıt veriyor" if ok is True else
+                 "Hata / kota" if ok is False else "Anahtar gerekli")
+        rows.append({"Kaynak": name, "Durum": state, "Son kontrol": item.get("checked_at", "—"),
+                     "Ayrıntı": item.get("detail", "Henüz test edilmedi")})
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+for _name, _configured in [
+    ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+    ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
+]:
+    set_provider_status(_name, _configured)
+
 st.title("⚽ Futbol Analiz Merkezi")
 st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
@@ -187,10 +221,15 @@ def api_get(endpoint, params=None):
         limit = r.headers.get("x-ratelimit-requests-limit")
         quota_note = f" (günlük kalan istek: {remaining}/{limit})" if remaining and limit else ""
         if r.status_code != 200:
-            return None, f"HTTP {r.status_code}{quota_note}: {r.text[:300]}", None
+            message = f"HTTP {r.status_code}{quota_note}: {r.text[:220]}"
+            set_provider_status("API-Football", True, False, message)
+            return None, message, None
         payload = r.json()
         if payload.get("errors"):
-            return None, f"API hatası{quota_note}: {payload['errors']}", payload
+            message = f"API hatası{quota_note}: {payload['errors']}"
+            set_provider_status("API-Football", True, False, message[:180])
+            return None, message, payload
+        set_provider_status("API-Football", True, True, f"HTTP 200{quota_note}; yanıt alındı.")
         return payload.get("response", []), None, payload
     except requests.Timeout:
         return None, "İstek zaman aşımına uğradı.", None
@@ -209,11 +248,16 @@ def football_data_get(path, params=None):
             params=params or {}, timeout=20
         )
         if response.status_code != 200:
-            return None, f"İkinci kaynak HTTP {response.status_code}: {response.text[:250]}"
+            message = f"football-data.org HTTP {response.status_code}: {response.text[:180]}"
+            set_provider_status("football-data.org", True, False, message)
+            return None, message
         payload = response.json()
+        set_provider_status("football-data.org", True, True, "HTTP 200; yanıt alındı.")
         return payload, None
     except (requests.RequestException, ValueError) as exc:
-        return None, f"İkinci kaynak bağlantı hatası: {exc}"
+        message = f"football-data.org bağlantı hatası: {exc}"
+        set_provider_status("football-data.org", True, False, message[:180])
+        return None, message
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -307,7 +351,9 @@ def espn_scoreboard_for_date(date_text, league_code):
             headers={"User-Agent": "Mozilla/5.0"}, timeout=15
         )
         if response.status_code != 200:
-            return [], f"ESPN HTTP {response.status_code}"
+            message = f"ESPN HTTP {response.status_code}"
+            set_provider_status("ESPN", True, False, message)
+            return [], message
         payload = response.json()
         out = []
         for event in payload.get("events", []):
@@ -355,9 +401,12 @@ def espn_scoreboard_for_date(date_text, league_code):
                           "fulltime": {"home": home_score, "away": away_score}},
                 "source": "ESPN"
             })
+        set_provider_status("ESPN", True, True, f"{league_code}: {len(out)} maç kaydı.")
         return out, None
     except (requests.RequestException, ValueError, TypeError) as exc:
-        return [], f"ESPN bağlantı hatası: {exc}"
+        message = f"ESPN bağlantı hatası: {exc}"
+        set_provider_status("ESPN", True, False, message[:180])
+        return [], message
 
 def espn_matches_for_date(date_text):
     """ESPN public scoreboards for selected major leagues; odds are never fabricated."""
@@ -412,11 +461,16 @@ def sportmonks_live_matches():
             timeout=20,
         )
         if response.status_code != 200:
-            return None, f"Sportmonks HTTP {response.status_code}: {response.text[:250]}"
+            message = f"Sportmonks HTTP {response.status_code}: {response.text[:180]}"
+            set_provider_status("Sportmonks", True, False, message)
+            return None, message
         payload = response.json()
+        set_provider_status("Sportmonks", True, True, f"HTTP 200; {len(payload.get('data', []))} canlı kayıt.")
         return payload.get("data", []), None
     except (requests.RequestException, ValueError) as exc:
-        return None, f"Sportmonks bağlantı hatası: {exc}"
+        message = f"Sportmonks bağlantı hatası: {exc}"
+        set_provider_status("Sportmonks", True, False, message[:180])
+        return None, message
 
 def sportmonks_to_api_football(matches):
     """Normalize Sportmonks livescores to the small schema used by show_matches."""
@@ -1227,7 +1281,7 @@ def show_matches(matches, prefix):
                     odds = show_odds(fid, match)
                 analyze_match(match, stats, odds)
 
-live_tab, date_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "ℹ️ Program hakkında"])
+live_tab, date_tab, source_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🛰️ Kaynak durumu", "ℹ️ Program hakkında"])
 with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
@@ -1246,16 +1300,14 @@ with live_tab:
             if err and (quota_exhausted or not API_KEY):
                 if SPORTMONKS_API_TOKEN:
                     sm_data, sm_err = sportmonks_live_matches()
-                    if not sm_err and sm_data:
-                        data = sportmonks_to_api_football(sm_data)
+                    if not sm_err:
+                        data = sportmonks_to_api_football(sm_data or [])
                         err = None
-                        source = "Sportmonks (ücretsiz lig kapsamı sınırlı)"
-                    elif sm_err:
-                        err = f"API-Football kotası dolu. Sportmonks yedeği de kullanılamadı: {sm_err}"
+                        source = "Sportmonks (lig kapsamı plana bağlı)"
                     else:
-                        err = "API-Football kotası dolu; Sportmonks şu anda canlı maç döndürmedi. Ücretsiz kapsam sınırlıdır."
+                        err = f"API-Football ana kaynağı kullanılamadı. Sportmonks yedeği: {sm_err}"
             elif not err and API_KEY and SPORTMONKS_API_TOKEN:
-                # Merge additional Sportmonks live matches when API-Football is available.
+                # A failed supplement must never invalidate a successful primary result.
                 sm_data, sm_err = sportmonks_live_matches()
                 if not sm_err and sm_data:
                     extra = sportmonks_to_api_football(sm_data)
@@ -1269,10 +1321,10 @@ with live_tab:
                         if match_key(item) not in seen:
                             merged.append(item); seen.add(match_key(item))
                     data = merged
-                    source = "API-Football + Sportmonks (Sportmonks ücretsiz lig kapsamı sınırlı)"
-                else:
-                    err = "API-Football kotası dolu ve SPORTMONKS_API_TOKEN tanımlı değil. Streamlit Secrets bölümündeki anahtar adını kontrol et."
-            if not data:
+                    source = "API-Football + Sportmonks (ek maçlar birleştirildi)"
+                elif sm_err:
+                    set_provider_status("Sportmonks", True, False, "Tamamlayıcı kaynak kullanılamadı; ana kaynak korunuyor.")
+            if not data and (err or quota_exhausted):
                 espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
                 live_espn = [m for m in espn_data if m.get("fixture", {}).get("status", {}).get("short") in ("LIVE", "HT")]
                 if live_espn:
@@ -1342,6 +1394,19 @@ with date_tab:
                         st.success(f"{name}: bağlantı yanıt verdi; {count} maç bulundu.")
                 st.caption("Not: Bağlantının yanıt vermesi, o kaynağın tüm ligleri kapsadığı anlamına gelmez. API kotası doluysa kod bunu yükseltemez.")
         show_matches(st.session_state["date_matches"], "date")
+with source_tab:
+    st.subheader("Veri sağlayıcıları ve kota yönetimi")
+    st.caption("API anahtarları gösterilmez. Durumlar uygulamanın son gözlemlediği yanıtları yansıtır; tüm liglerin kapsandığını garanti etmez.")
+    provider_status_table()
+    st.markdown("**Kota koruması ve kapsam**")
+    st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
+    st.write("- API-Football kota/bağlantı hatasında Sportmonks denenir; ana kaynak da boşsa seçili liglerde ESPN yedeği denenir.")
+    st.write("- football-data.org, OpenLigaDB ve ESPN tamamlayıcı fikstür kaynaklarıdır; her biri tüm dünya liglerini, canlı istatistikleri veya oranları kapsamaz.")
+    st.write("- Sağlayıcı kotası kodla artırılamaz. Tüm kaynaklar sınırına ulaşırsa veri gecikebilir veya bulunamayabilir.")
+    if st.button("Kaynak durumlarını sıfırla", key="reset_provider_status"):
+        st.session_state["provider_statuses"] = {}
+        st.rerun()
+
 with info_tab:
     st.subheader("Program hakkında")
     st.markdown("""
@@ -1350,7 +1415,7 @@ with info_tab:
 - Mevcutsa kadro ve bahis oranları.
 - Oranın ham olasılığı: 100 / oran. Bu, gerçek kazanma olasılığı değildir ve şirket marjını içerebilir.
 - **Maçı analiz et** düğmesi mevcut istatistikleri ve oranları bir araya getirir; ayrıca kalibre edilmemiş deneysel kısa-vade gol/korner olasılığı gösterir.
-- API çağrıları kısa süre önbelleğe alınır; sayfa yenilenince ücretsiz günlük limit gereksiz yere tüketilmez.
+- API çağrıları uç noktaya göre önbelleğe alınır; Kaynak durumu sekmesi sağlayıcıların son yanıt durumunu gösterir.
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
