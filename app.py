@@ -218,14 +218,19 @@ def openligadb_matches_for_date(date_text):
         return [], "Geçersiz tarih"
     season = chosen.year if chosen.month >= 7 else chosen.year - 1
     out = []
+    errors = []
+    successful_competitions = 0
     # Bundesliga and 2. Bundesliga are separate competitions; requests are cached for an hour.
     for shortcut, league_name in (("bl1", "Almanya Bundesliga"), ("bl2", "Almanya 2. Bundesliga")):
         try:
             response = requests.get(f"https://api.openligadb.de/getmatchdata/{shortcut}/{season}", timeout=12)
             if response.status_code != 200:
+                errors.append(f"{shortcut}: HTTP {response.status_code}")
                 continue
             matches = response.json()
-        except (requests.RequestException, ValueError):
+            successful_competitions += 1
+        except (requests.RequestException, ValueError) as exc:
+            errors.append(f"{shortcut}: {exc}")
             continue
         for item in matches if isinstance(matches, list) else []:
             match_date = (item.get("matchDateTimeUTC") or item.get("matchDateTime") or "")
@@ -250,7 +255,11 @@ def openligadb_matches_for_date(date_text):
                 "league": {"name": league_name, "country": "Almanya"},
                 "_source": "OpenLigaDB", "_raw_supplemental": item
             })
-    return out, None
+    if successful_competitions == 0:
+        return out, "OpenLigaDB iki lig isteğinde de yanıt alınamadı: " + "; ".join(errors)
+    if not out:
+        return out, "OpenLigaDB bağlantısı çalıştı ancak seçilen tarihte Bundesliga / 2. Bundesliga maçı bulunmadı."
+    return out, ("; ".join(errors) if errors else None)
 
 def merge_fixture_sources(primary, supplemental):
     """Merge fixtures by normalized team names so one match is not shown twice."""
@@ -1172,14 +1181,25 @@ with date_tab:
             st.session_state["date_sources"] = {
                 "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or [])
             }
-            st.session_state["date_errors"] = [x for x in (api_err, fd_err, oldb_err) if x]
+            st.session_state["date_errors"] = {
+                "API-Football": api_err,
+                "football-data.org": fd_err,
+                "OpenLigaDB": oldb_err,
+            }
     if "date_matches" in st.session_state:
         st.caption("Seçilen tarih: " + st.session_state.get("date_label", ""))
         counts = st.session_state.get("date_sources", {})
         st.caption("Kaynak katkıları: " + " · ".join(f"{name}: {count}" for name, count in counts.items()))
-        errs = st.session_state.get("date_errors", [])
+        errs = st.session_state.get("date_errors", {})
         if errs:
-            st.caption("Bazı ek kaynaklar kullanılamadı; sonuçlar mevcut kaynaklarla gösteriliyor.")
+            with st.expander("Kaynak kontrolü — hangi kaynak neden veri vermedi?", expanded=True):
+                for name, message in errs.items():
+                    count = counts.get(name, 0)
+                    if message:
+                        st.warning(f"{name}: {count} maç. Ayrıntı: {message}")
+                    else:
+                        st.success(f"{name}: bağlantı yanıt verdi; {count} maç bulundu.")
+                st.caption("Not: Bağlantının yanıt vermesi, o kaynağın tüm ligleri kapsadığı anlamına gelmez. API kotası doluysa kod bunu yükseltemez.")
         show_matches(st.session_state["date_matches"], "date")
 with info_tab:
     st.subheader("Program hakkında")
