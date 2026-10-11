@@ -539,7 +539,7 @@ def five_dollar_live_matches():
     if not FIVE_DOLLAR_FOOTBALL_API_KEY:
         return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
     try:
-        response = requests.get("https://api.5dollarfootballapi.com/v1/fixtures", params={"status": "live", "per_page": 100}, headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"}, timeout=20)
+        response = requests.get("https://api.5dollarfootballapi.com/v1/fixtures", params={"status": "live", "per_page": 500}, headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"}, timeout=20)
         if response.status_code != 200:
             message = f"5DollarFootballAPI HTTP {response.status_code}: {response.text[:160]}"
             set_provider_status("5DollarFootballAPI", True, False, message)
@@ -1608,6 +1608,8 @@ with live_tab:
         with st.spinner("Canlı maçlar yükleniyor..."):
             data, err = five_dollar_live_matches() if FIVE_DOLLAR_FOOTBALL_API_KEY else (None, "5DollarFootballAPI anahtarı tanımlı değil; açık kaynaklar deneniyor.")
             source = "5DollarFootballAPI" if data is not None else "Ücretsiz/açık skor kaynakları"
+            five_dollar_error = err
+            five_dollar_returned = data is not None
             # Providers phrase exhausted quotas differently (e.g. "request limit for the day").
             err_text = str(err or "").lower()
             quota_exhausted = any(term in err_text for term in (
@@ -1707,6 +1709,11 @@ with live_tab:
                             data = []
                             err = None
                             source = "ESPN açık skor panoları"
+                            if FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_error:
+                            st.session_state["live_notice"] = "5DollarFootballAPI yanıt vermedi: " + str(five_dollar_error)[:220] + " | ESPN de şu an canlı maç bulamadı. Kaynak durumu sekmesinden ayrıntıları kontrol et."
+                        elif FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_returned:
+                            st.session_state["live_notice"] = "5DollarFootballAPI yanıt verdi ancak canlı maç listesi boş döndü; ESPN yedeğinde de şu an canlı maç bulunamadı. Kaynak durumu sekmesinden 5DollarFootballAPI yanıtını kontrol et."
+                        else:
                             st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Daha geniş lig kapsamı için yeniden deneyebilir veya Tarihe göre maçlar sekmesini kullanabilirsin."
                         elif err:
                             err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
