@@ -478,7 +478,7 @@ def espn_scoreboard_for_date(date_text, league_code):
                 "goals": {"home": home_score, "away": away_score},
                 "score": {"halftime": {"home": None, "away": None},
                           "fulltime": {"home": home_score, "away": away_score}},
-                "source": "ESPN"
+                "source": "ESPN", "_source": "ESPN"
             })
         set_provider_status("ESPN", True, True, f"{league_code}: {len(out)} maç kaydı.")
         return out, None
@@ -774,6 +774,10 @@ def tr_status(status):
     return STATUS_TR.get(status or "", status or "Bilinmiyor")
 
 def show_stats(fixture_id, match):
+    source = match.get("_source") or match.get("source")
+    if source not in ("Sportmonks", "API-Football"):
+        st.info(f"{source or 'Bu maçın kaynağı'} bu maç için istatistik sağlamıyor; eski API’ye istek gönderilmedi.")
+        return None
     if match.get("_source") == "Sportmonks":
         raw = match.get("_sportmonks_raw") or {}
         if not raw.get("statistics"):
@@ -812,7 +816,7 @@ def show_stats(fixture_id, match):
     else:
         data, err, _ = api_get("fixtures/statistics", {"fixture": fixture_id})
         if not data or len(data) < 2:
-            if err: st.error(f"API-Football istatistik isteği: {err}")
+            if err: st.error(f"İstatistik isteği: {err}")
             st.warning("Bu maç için istatistik sağlayıcıdan gelmedi; veri uydurulmadı.")
             return None
         teams = match.get("teams", {})
@@ -830,6 +834,10 @@ def show_stats(fixture_id, match):
             "home_rows": data[0].get("statistics", []), "away_rows": data[1].get("statistics", [])}
 
 def show_player_statistics(fixture_id, match=None):
+    source = (match or {}).get("_source") or (match or {}).get("source")
+    if source not in ("Sportmonks", "API-Football"):
+        st.info(f"{source or 'Bu maçın kaynağı'} oyuncu istatistiği sağlamıyor; eski API’ye istek gönderilmedi.")
+        return
     """Player-level match statistics from API-Football; never invent missing values."""
     if match and (match.get("_source") not in (None, "API-Football")):
         st.info(f"Oyuncu istatistikleri bu fikstür kaynağında doğrudan desteklenmiyor ({match.get('_source')}). API-Football kaynaklı eşleşmiş maçı kullan.")
@@ -876,6 +884,10 @@ def show_player_statistics(fixture_id, match=None):
     st.caption("Alanlar sağlayıcının yanıtına göre doldurulur; eksik alanlar boş bırakılır.")
 
 def show_lineups(fixture_id, match=None):
+    source = (match or {}).get("_source") or (match or {}).get("source")
+    if source not in ("Sportmonks", "API-Football"):
+        st.info(f"{source or 'Bu maçın kaynağı'} kadro verisi sağlamıyor; eski API’ye istek gönderilmedi.")
+        return
     if match and match.get("_source") == "Sportmonks":
         raw = match.get("_sportmonks_raw") or {}
         if not raw.get("lineups"):
@@ -920,6 +932,10 @@ def show_lineups(fixture_id, match=None):
             if subs: st.write("**Yedekler:** " + ", ".join(subs))
 
 def show_odds(fixture_id, match=None):
+    source = (match or {}).get("_source") or (match or {}).get("source")
+    if source not in ("Sportmonks", "API-Football"):
+        st.info(f"{source or 'Bu maçın kaynağı'} bahis oranı sağlamıyor; eski API’ye istek gönderilmedi.")
+        return []
     if match and match.get("_source") == "Sportmonks":
         data, err = sportmonks_live_odds(fixture_id)
         if err:
@@ -950,7 +966,7 @@ def show_odds(fixture_id, match=None):
         st.error(f'Oran isteği başarısız: {err}')
         return []
     if not data:
-        st.info("Bu maç için API-Football oranı bulunamadı. Ücretsiz günlük kota ve pazar kapsamı sınırlı olabilir.")
+        st.info("Bu maç için kullanılabilir oran verisi bulunamadı.")
         return []
     all_rows = []
     for item in data:
@@ -1512,17 +1528,12 @@ def show_matches(matches, prefix):
                         st.info("Bu maç için TheSportsDB olay akışı yok.")
             elif match.get("_source") not in (None, "API-Football", "Sportmonks"):
                 st.caption(f"Bu maçın fikstür kaynağı: {match.get('_source')}. Bu kaynağın maç ID'si API-Football ID'si olmadığı için API-Football istatistik/oran uç noktalarıyla sorgulanmaz. Gelişmiş istatistik için API-Football/Sportmonks kaynağındaki eşleşmiş maçı kullan.")
-            if st.button("API yanıtını kontrol et", key=f"{prefix}_diag_{fid}"):
-                with st.spinner("İstatistik API yanıtı kontrol ediliyor..."):
-                    diag_data, diag_err, diag_payload = api_get("fixtures/statistics", {"fixture": fid})
-                if diag_err:
-                    st.error(diag_err)
+            if st.button("Kaynak uygunluğunu kontrol et", key=f"{prefix}_diag_{fid}"):
+                current_source = match.get("_source") or match.get("source") or "Bilinmeyen kaynak"
+                if current_source == "Sportmonks":
+                    st.info("Sportmonks istatistikleri yukarıdaki istatistik düğmesinden sorgulanır.")
                 else:
-                    st.write(f"İstatistik uç noktası yanıt verdi. Dönen takım kaydı: {len(diag_data or [])}.")
-                    if not diag_data:
-                        st.warning("API hata bildirmedi ancak bu maç için istatistik kaydı boş.")
-                    if diag_payload:
-                        st.json({"results": diag_payload.get("results"), "errors": diag_payload.get("errors"), "response_count": len(diag_data or [])})
+                    st.info(f"{current_source} için eski API istatistik uç noktası çağrılmaz; kaynak yalnızca desteklediği verileri sağlar.")
             stats = None
             odds = []
             if st.session_state.get(f"players_{fid}"):
@@ -1562,7 +1573,7 @@ with live_tab:
                         err = None
                         source = "Sportmonks (lig kapsamı plana bağlı)"
                     else:
-                        err = f"API-Football ana kaynağı kullanılamadı. Sportmonks yedeği: {sm_err}"
+                        err = f"Birincil kaynak kullanılamadı. Sportmonks yedeği: {sm_err}"
             elif not err and API_KEY and SPORTMONKS_API_TOKEN:
                 # A failed supplement must never invalidate a successful primary result.
                 sm_data, sm_err = sportmonks_live_matches()
