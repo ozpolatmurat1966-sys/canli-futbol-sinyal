@@ -103,6 +103,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
 
 API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
+SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 st.title("⚽ Futbol Analiz Merkezi")
 st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
@@ -151,6 +152,48 @@ def football_data_get(path, params=None):
     except (requests.RequestException, ValueError) as exc:
         return None, f"İkinci kaynak bağlantı hatası: {exc}"
 
+
+@st.cache_data(ttl=45, show_spinner=False)
+def sportmonks_live_matches():
+    """Optional Sportmonks fallback. Free coverage is limited to selected leagues."""
+    if not SPORTMONKS_API_TOKEN:
+        return None, "Sportmonks token eklenmedi."
+    try:
+        response = requests.get(
+            "https://api.sportmonks.com/v3/football/livescores",
+            params={
+                "api_token": SPORTMONKS_API_TOKEN,
+                "include": "participants;statistics.type;lineups.player"
+            },
+            timeout=20,
+        )
+        if response.status_code != 200:
+            return None, f"Sportmonks HTTP {response.status_code}: {response.text[:250]}"
+        payload = response.json()
+        return payload.get("data", []), None
+    except (requests.RequestException, ValueError) as exc:
+        return None, f"Sportmonks bağlantı hatası: {exc}"
+
+def sportmonks_find_match(home_name, away_name):
+    matches, err = sportmonks_live_matches()
+    if err or not matches:
+        return None, err or "Sportmonks canlı maç döndürmedi."
+    def norm(txt):
+        return "".join(ch.lower() for ch in str(txt or "") if ch.isalnum())
+    target_home, target_away = norm(home_name), norm(away_name)
+    for match in matches:
+        participants = match.get("participants") or []
+        names = [norm(p.get("name")) for p in participants]
+        # The feed can order participants differently, so match both directions.
+        if len(names) >= 2 and (
+            (target_home in names[0] or names[0] in target_home) and
+            (target_away in names[1] or names[1] in target_away) or
+            (target_home in names[1] or names[1] in target_home) and
+            (target_away in names[0] or names[0] in target_away)
+        ):
+            return match, None
+    return None, "Sportmonks ücretsiz kapsamındaki canlı maçlar arasında bu karşılaşma bulunamadı."
+
 def num(value):
     if value is None:
         return None
@@ -170,13 +213,43 @@ def tr_status(status):
 
 def show_stats(fixture_id, match):
     data, err, _ = api_get("fixtures/statistics", {"fixture": fixture_id})
-    if err:
-        st.error(f"İstatistik isteği başarısız: {err}")
-        return None
     if not data or len(data) < 2:
-        st.warning("İstatistik isteği gönderildi ancak API kullanılabilir istatistik döndürmedi. Bu durum genellikle maç/lig kapsamı, maçın durumu veya henüz yayımlanmamış veriden kaynaklanır. Aynı maçın oranlarının gelmesi, istatistiklerin de mevcut olduğu anlamına gelmez.")
-        st.caption("Kontrol: API-Football panelindeki günlük istek hakkını ve ilgili ligin Coverage bölümünü kontrol edin. Uygulama eksik istatistiği tahmin ederek doldurmaz.")
-        return None
+        teams = match.get("teams", {})
+        home_name = teams.get("home", {}).get("name", "")
+        away_name = teams.get("away", {}).get("name", "")
+        sm_match, sm_err = sportmonks_find_match(home_name, away_name) if SPORTMONKS_API_TOKEN else (None, "Sportmonks token eklenmedi.")
+        if sm_match:
+            sm_stats = sm_match.get("statistics") or []
+            # Convert Sportmonks statistic rows into the app's two-team display format.
+            by_team = {}
+            for item in sm_stats:
+                participant_id = item.get("participant_id")
+                participant = item.get("participant") or {}
+                team_name = participant.get("name") or str(participant_id or "Takım")
+                by_team.setdefault(team_name, []).append({
+                    "type": (item.get("type") or {}).get("name", "İstatistik"),
+                    "value": (item.get("data") or {}).get("value")
+                })
+            if len(by_team) >= 2:
+                names = list(by_team.keys())[:2]
+                data = [
+                    {"team": {"name": names[0]}, "statistics": by_team[names[0]]},
+                    {"team": {"name": names[1]}, "statistics": by_team[names[1]]},
+                ]
+                st.info("İstatistikler yedek kaynak Sportmonks üzerinden alındı.")
+            else:
+                st.warning("API-Football veri döndürmedi; Sportmonks da bu maç için iki takımın istatistiğini sunmadı.")
+                if sm_err: st.caption(sm_err)
+                return None
+        else:
+            if err:
+                st.error(f"API-Football isteği başarısız: {err}")
+            st.warning("İstatistik kaydı API-Football'da boş.")
+            if SPORTMONKS_API_TOKEN:
+                st.caption(sm_err or "Sportmonks bu maçı yedek kaynakta bulamadı. Ücretsiz plan yalnızca Danimarka Superliga ve İskoçya Premiership kapsamındadır.")
+            else:
+                st.caption("Yedek kaynak için Streamlit Secrets bölümüne SPORTMONKS_API_TOKEN eklenmelidir. Ücretsiz kapsam yalnızca seçili liglerle sınırlıdır.")
+            return None
 
     teams = match.get("teams", {})
     home_name = teams.get("home", {}).get("name", data[0].get("team", {}).get("name", "Ev sahibi"))
@@ -198,14 +271,36 @@ def show_stats(fixture_id, match):
         "away_rows": data[1].get("statistics", []),
     }
 
-def show_lineups(fixture_id):
+def show_lineups(fixture_id, match=None):
     data, err, _ = api_get("fixtures/lineups", {"fixture": fixture_id})
-    if err:
+    if not data and match and SPORTMONKS_API_TOKEN:
+        teams = match.get("teams", {})
+        sm_match, sm_err = sportmonks_find_match(
+            teams.get("home", {}).get("name", ""),
+            teams.get("away", {}).get("name", "")
+        )
+        if sm_match:
+            sm_lineups = sm_match.get("lineups") or []
+            converted = []
+            for lineup in sm_lineups:
+                player = lineup.get("player") or {}
+                converted.append({
+                    "team": {"name": (lineup.get("team") or {}).get("name", "Takım")},
+                    "formation": lineup.get("formation_position"),
+                    "startXI": [{"player": {"name": player.get("display_name") or player.get("name") or "Oyuncu"}}]
+                              if lineup.get("type", {}).get("name", "").lower() in ("starting XI", "starter") else [],
+                    "substitutes": []
+                })
+            if converted:
+                data = converted
+                st.info("Kadro bilgisi yedek kaynak Sportmonks üzerinden alındı; oyuncu sınıflaması sağlayıcının sunduğu alanlarla sınırlı olabilir.")
+        elif sm_err:
+            st.caption(sm_err)
+    if err and not data:
         st.error(f"Kadro isteği başarısız: {err}")
-        return
     if not data:
-        st.warning("Kadro isteği gönderildi ancak API kadro döndürmedi. Kadrolar çoğunlukla maçtan yaklaşık 20–40 dakika önce gelir; bazı liglerde bu veri hiç sunulmayabilir.")
-        st.caption("Bu durumda uygulama kadro uydurmaz. İlgili maçın lig kapsamı ve API günlük limitini kontrol edin.")
+        st.warning("Kadro verisi API-Football'da bulunamadı; yedek kaynak da bu maç için kadro döndürmedi. Kadro verisi olmayan maçlarda oyuncu listesi uydurulmaz.")
+        st.caption("Kadrolar maçtan önce açıklanabilir; ayrıca Sportmonks ücretsiz kapsamı yalnızca seçili liglerle sınırlıdır.")
         return
     st.subheader("Kadro bilgileri")
     cols = st.columns(min(2, len(data)))
@@ -374,7 +469,7 @@ def show_matches(matches, prefix):
             if st.session_state.get(f"stats_{fid}"):
                 stats = show_stats(fid, match)
             if st.session_state.get(f"lineup_{fid}"):
-                show_lineups(fid)
+                show_lineups(fid, match)
             if st.session_state.get(f"odds_{fid}"):
                 odds = show_odds(fid)
             if st.session_state.get(f"analyze_{fid}"):
@@ -417,8 +512,16 @@ with tr_sources_tab:
     st.markdown("- [Google Haberler – Futbol haberleri](https://news.google.com/search?q= futbol)")
     st.markdown("**Sonraki entegrasyon için:** Resmî/izinli oran akışı veya erişilebilir RSS haber akışı bağlandığında kaynak, tarih ve bağlantı bilgileriyle havuz oluşturulabilir. Sosyal medya yorumları ayrı bir bölümde, kaynak ve zaman damgasıyla tutulmalı; tek başına bahis sinyali sayılmamalıdır.")
     st.divider()
-    st.subheader("İkinci ücretsiz veri kaynağı: football-data.org")
-    st.write("Bu kaynak bazı liglerde fikstür, sonuç ve puan durumu için yedek olabilir. Ücretsiz katman ayrıntılı canlı istatistik, tüm kadrolar veya bahis oranları sağlamaz; bu nedenle mevcut API-Football'ın tam yerine geçmez.")
+    st.subheader("Yedek canlı veri kaynağı: Sportmonks")
+    st.write("Sportmonks canlı maç, olay, istatistik ve kadro alanlarını tek yanıtta sağlayabilir. Ancak ücretsiz planı yalnızca Danimarka Superliga ve İskoçya Premiership ile sınırlıdır; diğer ligler için ücretsiz yedek garanti edilmez.")
+    if not SPORTMONKS_API_TOKEN:
+        st.info("Sportmonks ücretsiz token'ını aldıktan sonra Streamlit Secrets bölümüne şu satırı ekle: SPORTMONKS_API_TOKEN = \"TOKENIN\"")
+    else:
+        st.success("Sportmonks token'ı tanımlı. İstatistik/kadro boşsa uygulama önce bu kaynağı da kontrol edecek.")
+    st.markdown("[Sportmonks ücretsiz plan ve token](https://www.sportmonks.com/football-api/free-plan/)")
+    st.divider()
+    st.subheader("Ek fikstür kaynağı: football-data.org")
+    st.write("football-data.org bazı liglerde fikstür, sonuç ve puan durumu için yedek olabilir. Ücretsiz katman ayrıntılı canlı istatistik, tüm kadrolar veya bahis oranları sağlamaz.")
     if not FOOTBALL_DATA_TOKEN:
         st.info("Bağlamak için football-data.org sitesinden ücretsiz token alıp Streamlit uygulama ayarları → Secrets bölümüne şu satırı ekle: FOOTBALL_DATA_TOKEN = \"TOKENIN\"")
     else:
@@ -452,5 +555,5 @@ with info_tab:
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
-- İkinci kaynak football-data.org opsiyoneldir; ücretsiz token ile yalnızca desteklediği yarışmaların fikstür/sonuç verilerini yedekler. Ayrıntılı istatistik ve oranları ikame etmez. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
+- İstatistik/kadro için Sportmonks yedek bağlantısı isteğe bağlıdır; ücretsiz kapsam Danimarka Superliga ve İskoçya Premiership ile sınırlıdır. football-data.org yalnızca desteklediği yarışmaların fikstür/sonuç verilerine yardımcı olur. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
