@@ -9,6 +9,23 @@ from urllib.parse import quote_plus
 
 st.set_page_config(page_title="Futbol Analiz Merkezi", page_icon="⚽", layout="wide")
 
+st.markdown("""
+<style>
+.stApp { background: linear-gradient(145deg, #07131f 0%, #0b1b2a 55%, #102b35 100%); }
+[data-testid="stHeader"] { background: rgba(7,19,31,.88); }
+[data-testid="stSidebar"] { background: #0a1925; }
+div[data-testid="stMetric"], div[data-testid="stExpander"] {
+  background: rgba(17,37,52,.72); border: 1px solid rgba(75,150,160,.24);
+  border-radius: 12px; padding: .45rem;
+}
+.stButton > button { border-radius: 9px; border: 1px solid #1c9b86; background: #0c6b60; color: white; font-weight: 650; }
+.stButton > button:hover { background: #128575; border-color: #50d8bd; color: white; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { border: 1px solid rgba(75,150,160,.25); border-radius: 10px; }
+h1, h2, h3 { color: #e5f6f4; }
+</style>
+""", unsafe_allow_html=True)
+
+
 BASE_URL = "https://v3.football.api-sports.io"
 
 STAT_TR = {
@@ -260,6 +277,80 @@ def openligadb_matches_for_date(date_text):
     if not out:
         return out, "OpenLigaDB bağlantısı çalıştı ancak seçilen tarihte Bundesliga / 2. Bundesliga maçı bulunmadı."
     return out, ("; ".join(errors) if errors else None)
+
+@st.cache_data(ttl=90, show_spinner=False)
+def espn_scoreboard_for_date(date_text, league_code):
+    """Public ESPN scoreboard fallback; coverage is limited to selected competitions."""
+    try:
+        response = requests.get(
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/scoreboard",
+            params={"dates": str(date_text).replace("-", ""), "limit": 100},
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=15
+        )
+        if response.status_code != 200:
+            return [], f"ESPN HTTP {response.status_code}"
+        payload = response.json()
+        out = []
+        for event in payload.get("events", []):
+            competitions = event.get("competitions") or []
+            if not competitions:
+                continue
+            comp = competitions[0]
+            competitors = comp.get("competitors") or []
+            home = next((x for x in competitors if x.get("homeAway") == "home"), None)
+            away = next((x for x in competitors if x.get("homeAway") == "away"), None)
+            if not home and competitors:
+                home = competitors[0]
+            if not away and len(competitors) > 1:
+                away = competitors[1]
+            if not home or not away:
+                continue
+            status = (comp.get("status") or {}).get("type") or {}
+            status_name = status.get("name", "STATUS_SCHEDULED")
+            status_map = {"STATUS_SCHEDULED":"NS", "STATUS_IN_PROGRESS":"LIVE",
+                          "STATUS_HALFTIME":"HT", "STATUS_FINAL":"FT",
+                          "STATUS_FULL_TIME":"FT", "STATUS_POSTPONED":"PST",
+                          "STATUS_CANCELED":"CANC"}
+            short = status_map.get(status_name, "NS")
+            period = (comp.get("status") or {}).get("period", 0)
+            minute = int(period * 45) if short == "LIVE" and period else None
+            def score(team):
+                value = team.get("score")
+                try:
+                    return int(value) if value not in (None, "") else None
+                except (TypeError, ValueError):
+                    return None
+            home_score, away_score = score(home), score(away)
+            out.append({
+                "fixture": {"id": event.get("id"), "date": event.get("date"),
+                            "timestamp": None, "status": {"long": status.get("description", status_name),
+                            "short": short, "elapsed": minute}},
+                "league": {"id": None, "name": (payload.get("leagues") or [{}])[0].get("name", league_code),
+                           "country": "", "logo": None, "round": ""},
+                "teams": {"home": {"id": None, "name": home.get("team", {}).get("displayName", "Ev Sahibi"),
+                                   "logo": home.get("team", {}).get("logo")},
+                          "away": {"id": None, "name": away.get("team", {}).get("displayName", "Deplasman"),
+                                   "logo": away.get("team", {}).get("logo")}},
+                "goals": {"home": home_score, "away": away_score},
+                "score": {"halftime": {"home": None, "away": None},
+                          "fulltime": {"home": home_score, "away": away_score}},
+                "source": "ESPN"
+            })
+        return out, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return [], f"ESPN bağlantı hatası: {exc}"
+
+def espn_matches_for_date(date_text):
+    """ESPN public scoreboards for selected major leagues; odds are never fabricated."""
+    leagues = ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "por.1",
+               "ned.1", "usa.1", "uefa.champions", "uefa.europa"]
+    combined, errors = [], []
+    for league_code in leagues:
+        matches, error = espn_scoreboard_for_date(date_text, league_code)
+        combined.extend(matches or [])
+        if error:
+            errors.append(league_code + ": " + error)
+    return combined, ("; ".join(errors) if errors else None)
 
 def merge_fixture_sources(primary, supplemental):
     """Merge fixtures by normalized team names so one match is not shown twice."""
@@ -1156,6 +1247,15 @@ with live_tab:
                     source = "API-Football + Sportmonks (Sportmonks ücretsiz lig kapsamı sınırlı)"
                 else:
                     err = "API-Football kotası dolu ve SPORTMONKS_API_TOKEN tanımlı değil. Streamlit Secrets bölümündeki anahtar adını kontrol et."
+            if not data:
+                espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
+                live_espn = [m for m in espn_data if m.get("fixture", {}).get("status", {}).get("short") in ("LIVE", "HT")]
+                if live_espn:
+                    data = live_espn
+                    err = None
+                    source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
+                elif espn_err and err:
+                    err = str(err) + " | ESPN yedeği: " + espn_err
         if err:
             st.error(err)
         else:
@@ -1175,16 +1275,18 @@ with date_tab:
             primary = primary or []
             fd_matches, fd_err = football_data_matches_for_date(chosen.isoformat())
             oldb_matches, oldb_err = openligadb_matches_for_date(chosen.isoformat())
-            combined = merge_fixture_sources(primary, (fd_matches or []) + (oldb_matches or []))
+            espn_matches, espn_err = espn_matches_for_date(chosen.isoformat())
+            combined = merge_fixture_sources(primary, (fd_matches or []) + (oldb_matches or []) + (espn_matches or []))
             st.session_state["date_matches"] = combined
             st.session_state["date_label"] = chosen.isoformat()
             st.session_state["date_sources"] = {
-                "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or [])
+                "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or []), "ESPN": len(espn_matches or [])
             }
             st.session_state["date_errors"] = {
                 "API-Football": api_err,
                 "football-data.org": fd_err,
                 "OpenLigaDB": oldb_err,
+                "ESPN": espn_err,
             }
     if "date_matches" in st.session_state:
         st.caption("Seçilen tarih: " + st.session_state.get("date_label", ""))
