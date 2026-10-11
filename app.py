@@ -62,6 +62,11 @@ def translate_market(value):
         ("Over/Under", "Alt/Üst"), ("Odd/Even", "Tek/Çift"),
         ("Total Goals", "Toplam Gol"), ("1st Half", "İlk Yarı"), ("2nd Half", "İkinci Yarı"),
         ("Half Time", "Devre Arası"), ("Full Time", "Maç Sonu"),
+        ("15 minutes", "İlk 15 Dakika"), ("30 minutes", "İlk 30 Dakika"),
+        ("60 minutes", "İlk 60 Dakika"), ("Next Goal", "Sonraki Gol"),
+        ("To Score", "Gol Atar"), ("No Goal", "Gol Olmaz"),
+        ("1X2", "Maç Sonucu"), ("Winner", "Kazanan"),
+        ("Corners", "Korner"), ("Offsides", "Ofsayt"),
     ]
     for en, tr in replacements:
         raw = raw.replace(en, tr)
@@ -70,6 +75,9 @@ def translate_market(value):
     raw = raw.replace("Player", "Oyuncu").replace("Shots", "Şut")
     raw = raw.replace(" (2nd Half)", " (İkinci Yarı)").replace(" (1st Half)", " (İlk Yarı)")
     raw = raw.replace(" (Second Half)", " (İkinci Yarı)").replace(" (First Half)", " (İlk Yarı)")
+    raw = raw.replace("1x2 - İlk 15 Dakika", "Maç Sonucu - İlk 15 Dakika")
+    raw = raw.replace("1x2 - İlk 30 Dakika", "Maç Sonucu - İlk 30 Dakika")
+    raw = raw.replace("1x2 - İlk 60 Dakika", "Maç Sonucu - İlk 60 Dakika")
     return raw
 
 def translate_option(value):
@@ -347,7 +355,68 @@ def show_odds(fixture_id):
                     with st.expander(market_tr):
                         st.dataframe([{k:v for k,v in row.items() if not k.startswith("_")} for row in rows],
                                      use_container_width=True, hide_index=True)
+    show_odds_comparison(all_rows)
     return all_rows
+
+def show_odds_comparison(odds_rows):
+    """Compare the best available price across providers for the same market/selection."""
+    if not odds_rows:
+        return
+    groups = {}
+    for row in odds_rows:
+        odd = row.get("_odd")
+        market = row.get("_market", "Pazar")
+        option = row.get("_option", "—")
+        if odd is None or odd <= 1:
+            continue
+        key = (market, option)
+        groups.setdefault(key, []).append(row)
+    comparison = []
+    for (market, option), rows in groups.items():
+        best = max(rows, key=lambda r: r.get("_odd", 0))
+        worst = min(rows, key=lambda r: r.get("_odd", 999999))
+        implied = 100 / best["_odd"]
+        comparison.append({
+            "Pazar": market,
+            "Seçenek": option,
+            "En iyi oran": best["_odd"],
+            "En iyi sağlayıcı": best.get("_bookmaker", "—"),
+            "En düşük oran": worst["_odd"],
+            "Oran farkı": round(best["_odd"] - worst["_odd"], 2),
+            "En iyi oranın ham olasılığı (%)": round(implied, 1),
+            "_market": market,
+            "_option": option,
+            "_best": best["_odd"],
+        })
+    if comparison:
+        st.markdown("**Bahis şirketleri arasında oran karşılaştırması**")
+        st.caption("Aynı pazar ve seçenek eşleştirildiğinde gösterilir. En yüksek oran tek başına bahis avantajı veya kazanma olasılığı anlamına gelmez.")
+        comparison.sort(key=lambda r: (r["Pazar"], -r["_best"]))
+        st.dataframe([{k: v for k, v in r.items() if not k.startswith("_")} for r in comparison],
+                     use_container_width=True, hide_index=True)
+        # A basic 1X2 market margin estimate only when all three outcomes exist in one bookmaker.
+        one_x_two = {}
+        for row in odds_rows:
+            market = str(row.get("_market", "")).lower()
+            option = str(row.get("_option", "")).lower()
+            if "1x2" not in market and "maç sonucu" not in market:
+                continue
+            if row.get("_odd") and row["_odd"] > 1:
+                outcome = "1" if ("ev sahibi" in option or option.strip() == "1") else (
+                    "x" if ("beraberlik" in option or option.strip() == "x") else (
+                    "2" if ("deplasman" in option or option.strip() == "2") else None))
+                if outcome:
+                    one_x_two.setdefault(row.get("_bookmaker", "—"), {})[outcome] = row["_odd"]
+        margin_rows = []
+        for book, outcomes in one_x_two.items():
+            if all(k in outcomes for k in ("1", "x", "2")):
+                total = sum(1 / outcomes[k] for k in ("1", "x", "2"))
+                margin_rows.append({"Sağlayıcı": book, "1X2 toplam ham olasılık (%)": round(total * 100, 1),
+                                    "Yaklaşık marj (%)": round((total - 1) * 100, 1)})
+        if margin_rows:
+            st.markdown("**1X2 oran marjı (yaklaşık)**")
+            st.dataframe(margin_rows, use_container_width=True, hide_index=True)
+
 
 def analyze_match(match, stats, odds_rows):
     st.subheader("🤖 Otomatik maç değerlendirmesi")
@@ -395,29 +464,41 @@ def analyze_match(match, stats, odds_rows):
     elif stats:
         st.info("İstatistiklerden güçlü bir sinyal çıkmadı.")
 
-    # Conservative recommendation: do not claim a proven predictive model.
-    selected = []
-    for row in odds_rows:
-        odd = row.get("_odd")
-        if odd is not None and odd > 1:
-            # odds alone cannot establish value; use only for candidate display
-            selected.append(row)
-    if selected:
-        st.markdown("**Oran ve veri birlikte değerlendirilirken dikkat edilecek adaylar**")
-        st.caption("Bu bölüm filtreleme desteğidir, doğrulanmış kazanma tahmini değildir. İstatistik ve oran tek başına yeterli değildir.")
-        selected.sort(key=lambda r: (r.get("_market",""), r.get("_odd", 999)))
+    # Compare providers and explain evidence quality without presenting an unvalidated bet as a prediction.
+    show_odds_comparison(odds_rows)
+    valid_odds = [r for r in odds_rows if r.get("_odd") and r["_odd"] > 1]
+    if valid_odds:
+        best_rows = {}
+        for row in valid_odds:
+            key = (row.get("_market", "Pazar"), row.get("_option", "—"))
+            if key not in best_rows or row["_odd"] > best_rows[key]["_odd"]:
+                best_rows[key] = row
+        top = sorted(best_rows.values(), key=lambda r: r["_odd"], reverse=True)[:12]
+        st.markdown("**Karşılaştırmada öne çıkan mevcut oranlar**")
+        st.caption("Bu liste en yüksek oranları gösterir; yüksek oran, sonucun daha olası olduğu anlamına gelmez.")
         st.dataframe([{
-            "Pazar": r["_market"], "Seçenek": r["_option"], "Oran": r["_odd"],
-            "Oranın ham olasılığı (%)": round(100/r["_odd"],1),
+            "Pazar": r["_market"], "Seçenek": r["_option"], "En iyi oran": r["_odd"],
+            "Ham olasılık (%)": round(100/r["_odd"], 1),
             "Sağlayıcı": r["_bookmaker"]
-        } for r in selected[:20]], use_container_width=True, hide_index=True)
+        } for r in top], use_container_width=True, hide_index=True)
     else:
-        st.info("Oran verisi olmadığı için oran bazlı aday listesi oluşturulamadı.")
+        st.info("Oran verisi olmadığı için karşılaştırma yapılamadı.")
 
-    if not stats:
-        st.warning("**Karar: PAS GEÇ.** Bu maç için istatistik verisi olmadığı ve oran geçmişi bulunmadığı için güvenilir bir 'oyna' sinyali üretilemiyor. Oranları gösterebiliriz ancak tek başına oran, avantaj kanıtı değildir.")
+    evidence = []
+    if elapsed is not None:
+        evidence.append("maç dakikası mevcut")
+    if home_goals is not None and away_goals is not None:
+        evidence.append("skor mevcut")
+    if metrics:
+        evidence.append(f"{len(metrics)} istatistik göstergesi mevcut")
+    if valid_odds:
+        evidence.append(f"{len(valid_odds)} oran kaydı mevcut")
+    st.markdown("**Veri yeterliliği kontrolü**")
+    st.write(" • ".join(evidence) if evidence else "Bu maç için kullanılabilir veri çok sınırlı.")
+    if not stats or not valid_odds or len(metrics) < 2:
+        st.warning("**Karar: PAS GEÇ / veri bekle.** İstatistik, oran veya karşılaştırılabilir gösterge eksik. Eksik veriler tamamlanmadan güvenilir bir seçim çıkarılamaz.")
     else:
-        st.warning("**Karar: Şimdilik PAS GEÇ / ek veri bekle.** Bu sürümde açılış oranı geçmişi ve geçmiş maçlarla doğrulanmış olasılık modeli yok. İstatistikler gösterilir; fakat bunlar tek başına güvenilir bahis önerisi sayılmaz.")
+        st.warning("**Karar: Şimdilik PAS GEÇ / ek doğrulama bekle.** İstatistik ve oranlar karşılaştırıldı; ancak açılış oranı geçmişi ve geçmiş maçlarda test edilmiş olasılık modeli olmadığı için bu sürüm doğrulanmış 'oyna' sinyali vermez.")
 
 def show_matches(matches, prefix):
     if not matches:
