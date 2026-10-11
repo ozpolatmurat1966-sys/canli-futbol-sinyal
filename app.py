@@ -1165,10 +1165,49 @@ def stat_value(rows, names):
 def tr_status(status):
     return STATUS_TR.get(status or "", status or "Bilinmiyor")
 
+
+@st.cache_data(ttl=45, show_spinner=False)
+def apifootball_com_detail(action, match_id):
+    """Fetch match detail using APIFootball.com match IDs."""
+    if not APIFOOTBALL_API_KEY:
+        return None, "APIFOOTBALL_API_KEY tanımlı değil."
+    match_id = str(match_id or "").replace("apifootballcom-", "").strip()
+    if not match_id:
+        return None, "APIFootball.com maç kimliği bulunamadı."
+    try:
+        response = requests.get("https://apiv3.apifootball.com/",
+            params={"action": action, "match_id": match_id, "APIkey": APIFOOTBALL_API_KEY},
+            headers={"Accept": "application/json"}, timeout=18)
+        if response.status_code != 200:
+            return None, f"APIFootball.com HTTP {response.status_code}: {response.text[:160]}"
+        payload = response.json()
+        if isinstance(payload, dict) and (payload.get("error") or payload.get("message")) and not payload.get(match_id):
+            return None, str(payload.get("error") or payload.get("message"))[:180]
+        return payload, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return None, f"APIFootball.com bağlantı/JSON hatası: {exc}"
+
 def show_stats(fixture_id, match):
     source = match.get("_source") or match.get("source")
+    if source == "APIFootball.com":
+        payload, err = apifootball_com_detail("get_statistics", fixture_id)
+        if err:
+            st.warning(f"APIFootball.com istatistik isteği: {err}")
+            return None
+        match_id = str(fixture_id).replace("apifootballcom-", "")
+        block = payload.get(match_id, {}) if isinstance(payload, dict) else {}
+        stats = block.get("statistics") or []
+        if not stats:
+            st.info("APIFootball.com bu maç için istatistik döndürmedi. Paket kapsamı veya maç verisi henüz hazır olmayabilir.")
+            return None
+        home_name = match.get("teams", {}).get("home", {}).get("name", "Ev sahibi")
+        away_name = match.get("teams", {}).get("away", {}).get("name", "Deplasman")
+        st.subheader("Maç istatistikleri")
+        st.dataframe([{"İstatistik": STAT_TR.get(x.get("type", ""), x.get("type", "İstatistik")), home_name: x.get("home", "—"), away_name: x.get("away", "—")} for x in stats], use_container_width=True, hide_index=True)
+        st.caption("Kaynak: APIFootball.com")
+        return {"home_name": home_name, "away_name": away_name, "home_rows": stats, "away_rows": stats}
     if source not in ("Sportmonks", "API-Football"):
-        st.info(f"{source or 'Bu maçın kaynağı'} bu maç için istatistik sağlamıyor; eski API’ye istek gönderilmedi.")
+        st.info(f"{source or 'Bu maçın kaynağı'} bu maç için istatistik sağlamıyor; bu kaynak için uygun maç kimliği bulunamadı.")
         return None
     if match.get("_source") == "Sportmonks":
         raw = match.get("_sportmonks_raw") or {}
@@ -1227,8 +1266,32 @@ def show_stats(fixture_id, match):
 
 def show_player_statistics(fixture_id, match=None):
     source = (match or {}).get("_source") or (match or {}).get("source")
+    if source == "APIFootball.com":
+        payload, err = apifootball_com_detail("get_statistics", fixture_id)
+        if err:
+            st.warning(f"APIFootball.com oyuncu istatistiği isteği: {err}")
+            return
+        match_id = str(fixture_id).replace("apifootballcom-", "")
+        block = payload.get(match_id, {}) if isinstance(payload, dict) else {}
+        players = block.get("player_statistics") or []
+        if not players:
+            st.info("Bu maç için oyuncu istatistikleri dönmedi. Sağlayıcı bu alanı maç/paket bazında sunuyor olabilir.")
+            return
+        st.subheader("Oyuncu bazında maç istatistikleri")
+        st.dataframe([{
+            "Takım": "Ev sahibi" if str(p.get("team_name", "")).lower() == "home" else ("Deplasman" if str(p.get("team_name", "")).lower() == "away" else p.get("team_name", "—")),
+            "Oyuncu": p.get("player_name", "—"), "Pozisyon": p.get("player_position", "—"),
+            "Dakika": p.get("player_minutes_played", "—"), "Puan": p.get("player_rating", "—"),
+            "Gol": p.get("player_goals", "—"), "Asist": p.get("player_assists", "—"),
+            "Şut": p.get("player_shots_total", "—"), "İsabetli şut": p.get("player_shots_on_goal", "—"),
+            "Pas": p.get("player_passes", "—"), "İsabetli pas": p.get("player_passes_acc", "—"),
+            "Müdahale": p.get("player_tackles", "—"), "Faul": p.get("player_fouls_commited", "—"),
+            "Sarı kart": p.get("player_yellowcards", "—"), "Kırmızı kart": p.get("player_redcards", "—")
+        } for p in players], use_container_width=True, hide_index=True)
+        st.caption("Kaynak: APIFootball.com; alanlar sağlayıcının döndürdüğü kayıtlarla sınırlıdır.")
+        return
     if source not in ("Sportmonks", "API-Football"):
-        st.info(f"{source or 'Bu maçın kaynağı'} oyuncu istatistiği sağlamıyor; eski API’ye istek gönderilmedi.")
+        st.info(f"{source or 'Bu maçın kaynağı'} oyuncu istatistiği sağlamıyor; bu kaynak için oyuncu verisi uç noktası tanımlı değil.")
         return
     """Player-level match statistics from API-Football; never invent missing values."""
     if match and (match.get("_source") not in (None, "API-Football")):
@@ -1277,8 +1340,38 @@ def show_player_statistics(fixture_id, match=None):
 
 def show_lineups(fixture_id, match=None):
     source = (match or {}).get("_source") or (match or {}).get("source")
+    if source == "APIFootball.com":
+        payload, err = apifootball_com_detail("get_lineups", fixture_id)
+        if err:
+            st.warning(f"APIFootball.com kadro isteği: {err}")
+            return
+        match_id = str(fixture_id).replace("apifootballcom-", "")
+        block = payload.get(match_id, {}) if isinstance(payload, dict) else {}
+        lineup = block.get("lineup") or {}
+        if not lineup:
+            st.info("APIFootball.com bu maç için kadro döndürmedi. Kadro henüz açıklanmamış veya paket kapsamı dışında olabilir.")
+            return
+        st.subheader("Kadro bilgileri")
+        cols = st.columns(2)
+        for idx, side in enumerate(("home", "away")):
+            team_name = (match or {}).get("teams", {}).get(side, {}).get("name", "Ev sahibi" if side == "home" else "Deplasman")
+            side_data = lineup.get(side) or {}
+            starters = side_data.get("starting_lineups") or []
+            subs = side_data.get("substitutes") or []
+            with cols[idx]:
+                st.markdown(f"**{team_name}**")
+                st.write("Diziliş:", (match or {}).get("teams", {}).get(side, {}).get("formation") or "Bilinmiyor")
+                st.write("**İlk 11**")
+                if starters:
+                    st.dataframe([{"Oyuncu": p.get("lineup_player", "—"), "Forma": p.get("lineup_number", "—"), "Pozisyon": p.get("lineup_position", "—")} for p in starters], use_container_width=True, hide_index=True)
+                else:
+                    st.write("İlk 11 bilgisi yok.")
+                if subs:
+                    st.write("**Yedekler:** " + ", ".join(p.get("lineup_player", "—") for p in subs))
+        st.caption("Kaynak: APIFootball.com")
+        return
     if source not in ("Sportmonks", "API-Football"):
-        st.info(f"{source or 'Bu maçın kaynağı'} kadro verisi sağlamıyor; eski API’ye istek gönderilmedi.")
+        st.info(f"{source or 'Bu maçın kaynağı'} kadro verisi sağlamıyor; bu kaynak için kadro uç noktası tanımlı değil.")
         return
     if match and match.get("_source") == "Sportmonks":
         raw = match.get("_sportmonks_raw") or {}
@@ -1325,8 +1418,38 @@ def show_lineups(fixture_id, match=None):
 
 def show_odds(fixture_id, match=None):
     source = (match or {}).get("_source") or (match or {}).get("source")
+    if source == "APIFootball.com":
+        payload, err = apifootball_com_detail("get_odds", fixture_id)
+        if err:
+            st.warning(f"APIFootball.com oran isteği: {err}")
+            return []
+        match_id = str(fixture_id).replace("apifootballcom-", "")
+        items = payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) else [])
+        items = [x for x in items if str(x.get("match_id", "")) == match_id]
+        if not items:
+            st.info("APIFootball.com bu maç için oran döndürmedi. Paket kapsamında olmayabilir veya maç için oran yayınlanmamış olabilir.")
+            return []
+        all_rows = []
+        label_map = {"odd_1":("Maç Sonucu (1X2)","Ev Sahibi (1)"),"odd_x":("Maç Sonucu (1X2)","Beraberlik (X)"),"odd_2":("Maç Sonucu (1X2)","Deplasman (2)"),"odd_1x":("Çifte Şans","1X"),"odd_12":("Çifte Şans","12"),"odd_x2":("Çifte Şans","X2"),"bts_yes":("Karşılıklı Gol","Evet"),"bts_no":("Karşılıklı Gol","Hayır")}
+        for item in items:
+            bookmaker = item.get("odd_bookmakers", "APIFootball.com")
+            for key, (market, option) in label_map.items():
+                odd = num(item.get(key))
+                if odd and odd > 1:
+                    all_rows.append({"Pazar":market,"Seçenek":option,"Oran":odd,"Oranın ham olasılığı (%)":round(100/odd,1),"_odd":odd,"_market":market,"_option":option,"_bookmaker":bookmaker})
+            for key, market, option in [("o+1.5","Gol Alt/Üst 1,5","Üst 1,5"),("u+1.5","Gol Alt/Üst 1,5","Alt 1,5"),("o+2.5","Gol Alt/Üst 2,5","Üst 2,5"),("u+2.5","Gol Alt/Üst 2,5","Alt 2,5"),("o+3.5","Gol Alt/Üst 3,5","Üst 3,5"),("u+3.5","Gol Alt/Üst 3,5","Alt 3,5")]:
+                odd = num(item.get(key))
+                if odd and odd > 1:
+                    all_rows.append({"Pazar":market,"Seçenek":option,"Oran":odd,"Oranın ham olasılığı (%)":round(100/odd,1),"_odd":odd,"_market":market,"_option":option,"_bookmaker":bookmaker})
+        if not all_rows:
+            st.info("Bu maç için kullanılabilir oran alanı yok.")
+            return []
+        st.subheader("APIFootball.com oranları")
+        st.dataframe([{k:v for k,v in row.items() if not k.startswith("_")} for row in all_rows], use_container_width=True, hide_index=True)
+        show_odds_comparison(all_rows)
+        return all_rows
     if source not in ("Sportmonks", "API-Football"):
-        st.info(f"{source or 'Bu maçın kaynağı'} bahis oranı sağlamıyor; eski API’ye istek gönderilmedi.")
+        st.info(f"{source or 'Bu maçın kaynağı'} bahis oranı sağlamıyor; bu kaynak için oran uç noktası tanımlı değil.")
         return []
     if match and match.get("_source") == "Sportmonks":
         data, err = sportmonks_live_odds(fixture_id)
