@@ -189,6 +189,7 @@ def provider_status_table():
         ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
         ("football-data.org", bool(FOOTBALL_DATA_TOKEN)),
         ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)),
+        ("SportScore", True),
         ("TheSportsDB", True),
         ("ESPN", True),
         ("OpenLigaDB", True),
@@ -674,6 +675,67 @@ def bsd_live_matches():
         message = f"Bzzoiro bağlantı/yanıt hatası: {exc}"
         set_provider_status("Bzzoiro Sports Data", True, False, message[:180])
         return None, message
+
+@st.cache_data(ttl=45, show_spinner=False)
+def sportscore_live_matches():
+    """Free live football feed from SportScore; attribution link is shown in the UI."""
+    try:
+        response = requests.get(
+            "https://sportscore.com/api/v1/fixtures/",
+            params={"sport": "football", "status": "live", "limit": 200},
+            headers={"User-Agent": "FutbolAnalizMerkezi/1.0"}, timeout=15
+        )
+        if response.status_code != 200:
+            message = f"SportScore HTTP {response.status_code}: {response.text[:140]}"
+            set_provider_status("SportScore", True, False, message)
+            return None, message
+        payload = response.json()
+        items = payload.get("data", payload.get("fixtures", payload.get("matches", []))) if isinstance(payload, dict) else payload
+        if isinstance(items, dict):
+            items = items.get("matches", items.get("fixtures", items.get("data", [])))
+        normalized = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            home_obj = item.get("home") or item.get("homeTeam") or item.get("home_team") or {}
+            away_obj = item.get("away") or item.get("awayTeam") or item.get("away_team") or {}
+            home = home_obj.get("name") or home_obj.get("team_name") or home_obj.get("displayName") if isinstance(home_obj, dict) else home_obj
+            away = away_obj.get("name") or away_obj.get("team_name") or away_obj.get("displayName") if isinstance(away_obj, dict) else away_obj
+            if not home or not away:
+                continue
+            raw_status = str(item.get("status") or item.get("status_text") or item.get("state") or "live").strip()
+            status_lower = raw_status.lower()
+            if any(x in status_lower for x in ("finish", "full time", "completed", "ended")):
+                short = "FT"
+            elif any(x in status_lower for x in ("half", "halftime", "half-time")):
+                short = "HT"
+            elif any(x in status_lower for x in ("live", "in progress", "in_progress", "playing", "1st", "2nd")):
+                short = "LIVE"
+            else:
+                # Endpoint is requested with status=live, but do not silently
+                # promote an unknown status to live.
+                continue
+            home_score = item.get("home_score", item.get("homeScore"))
+            away_score = item.get("away_score", item.get("awayScore"))
+            time_text = item.get("time") or item.get("kickoff") or item.get("date") or item.get("start_time")
+            league = item.get("competition") or item.get("league") or item.get("tournament") or "SportScore"
+            league_name = league.get("name") if isinstance(league, dict) else str(league)
+            normalized.append({
+                "fixture": {"id": item.get("id") or item.get("slug"), "date": time_text,
+                            "status": {"long": raw_status, "short": short, "elapsed": item.get("minute", item.get("elapsed"))}},
+                "teams": {"home": {"id": None, "name": str(home), "logo": (home_obj.get("logo") or home_obj.get("image")) if isinstance(home_obj, dict) else None},
+                          "away": {"id": None, "name": str(away), "logo": (away_obj.get("logo") or away_obj.get("image")) if isinstance(away_obj, dict) else None}},
+                "goals": {"home": home_score, "away": away_score},
+                "league": {"name": league_name, "country": ""},
+                "_source": "SportScore", "source": "SportScore", "_raw_sportscore": item
+            })
+        set_provider_status("SportScore", True, True, f"HTTP 200; {len(items or [])} kayıt, {len(normalized)} canlı kayıt normalize edildi.")
+        return normalized, None
+    except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+        message = f"SportScore bağlantı/yanıt hatası: {exc}"
+        set_provider_status("SportScore", True, False, message[:180])
+        return None, message
+
 
 @st.cache_data(ttl=45, show_spinner=False)
 def sportmonks_live_matches():
@@ -1753,6 +1815,15 @@ with live_tab:
                         err = None
                         source = "TheSportsDB açık maç listesi (kapsam sınırlı; oran yok)"
                     if not data:
+                        sportscore_data, sportscore_err = sportscore_live_matches()
+                        live_diagnostics.append({"Kaynak": "SportScore", "Alınan kayıt": len(sportscore_data or []) if not sportscore_err else "—", "Canlı filtresinden geçen": len(sportscore_data or []) if not sportscore_err else "—", "Not": sportscore_err or "Canlı fikstür uç noktası"})
+                        st.session_state["live_diagnostics"] = live_diagnostics
+                        if sportscore_data:
+                            data = sportscore_data
+                            err = None
+                            source = "SportScore canlı skorları"
+                            st.session_state["live_notice"] = "Canlı skorlar SportScore üzerinden gösteriliyor. Kaynak kapsamı ve güncelleme sıklığı sağlayıcıya bağlıdır."
+                    if not data:
                         espn_data, espn_err = espn_matches_for_date(today_text)
                         # ESPN can occasionally leave an old event marked as in progress.
                         # Only show plausible live matches kicked off within the last five hours.
@@ -1838,6 +1909,7 @@ with live_tab:
 
     if st.session_state.get("live_notice"):
         st.info(st.session_state["live_notice"])
+    st.markdown('Veri sağlayıcısı: <a href="https://sportscore.com/" target="_blank" rel="dofollow">Powered by SportScore</a>', unsafe_allow_html=True)
     if st.session_state.get("live_diagnostics"):
         with st.expander("🔎 Canlı veri teşhisi — kaynak kaynak kayıt sayıları", expanded=True):
             st.dataframe(st.session_state["live_diagnostics"], use_container_width=True, hide_index=True)
