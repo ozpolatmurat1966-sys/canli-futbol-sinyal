@@ -170,7 +170,6 @@ SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
 THESPORTSDB_API_KEY = str(secret("THESPORTSDB_API_KEY", "123")).strip() or "123"
 APIFOOTBALL_API_KEY = str(secret("APIFOOTBALL_API_KEY", "")).strip()
-FOOTYSTATS_API_KEY = str(secret("FOOTYSTATS_API_KEY", "")).strip()
 API_FOOTBALL_V3_KEY = ""  # Askıya alınan API-Football v3 hesabına bağımlılık kaldırıldı.
 
 # Provider health is session-local; never display credentials.
@@ -199,7 +198,6 @@ def provider_status_table():
         ("TheSportsDB", True),
         ("ESPN", True),
         ("OpenLigaDB", True),
-        ("FootyStats", bool(FOOTYSTATS_API_KEY)),
     ]:
         item = statuses.get(name, {})
         ok = item.get("ok")
@@ -250,90 +248,6 @@ def api_get(endpoint, params=None):
         return None, "İstek zaman aşımına uğradı.", None
     except (requests.RequestException, ValueError) as e:
         return None, f"Bağlantı hatası: {e}", None
-
-@st.cache_data(ttl=300, show_spinner=False)
-def footystats_get(endpoint, params=None):
-    """FootyStats API. Requires the real account key; never silently substitutes the public example key."""
-    token = FOOTYSTATS_API_KEY
-    if not token:
-        message = "FOOTYSTATS_API_KEY tanımlı değil. Gerçek hesap anahtarını Streamlit Secrets bölümüne ekle; örnek anahtar otomatik kullanılmıyor."
-        set_provider_status("FootyStats", False, False, message)
-        return None, message
-    query = {"key": token}
-    query.update(params or {})
-    try:
-        response = requests.get(
-            f"https://api.football-data-api.com/{endpoint.lstrip('/')}",
-            params=query, headers={"Accept": "application/json"}, timeout=18
-        )
-        if response.status_code != 200:
-            message = f"FootyStats HTTP {response.status_code}: {response.text[:160]}"
-            set_provider_status("FootyStats", token != "example", False, message)
-            return None, message
-        payload = response.json()
-        if not isinstance(payload, dict) or payload.get("success") is False:
-            message = str((payload or {}).get("message") or (payload or {}).get("error") or "Beklenmeyen API yanıtı")[:180]
-            set_provider_status("FootyStats", token != "example", False, message)
-            return None, message
-        data = payload.get("data")
-        count = len(data) if isinstance(data, list) else (1 if data else 0)
-        set_provider_status("FootyStats", True, True, f"HTTP 200; {count} kayıt; hesap anahtarı.")
-        return payload, None
-    except (requests.RequestException, ValueError, TypeError) as exc:
-        message = f"FootyStats bağlantı/JSON hatası: {exc}"
-        set_provider_status("FootyStats", bool(token), False, message[:180])
-        return None, message
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def footystats_league_options():
-    """Return leagues/seasons enabled for the user's FootyStats account."""
-    payload, err = footystats_get("league-list", {"chosen_leagues_only": "true"})
-    if err or not isinstance(payload, dict):
-        return [], err or "FootyStats lig listesi okunamadı"
-    leagues = payload.get("data") or []
-    options = []
-    for league in leagues:
-        if not isinstance(league, dict):
-            continue
-        league_name = league.get("name") or league.get("league_name") or "Lig"
-        country = league.get("country") or ""
-        seasons = league.get("season") or []
-        if isinstance(seasons, dict):
-            seasons = [seasons]
-        for season in seasons if isinstance(seasons, list) else []:
-            if not isinstance(season, dict) or season.get("id") is None:
-                continue
-            year = season.get("year") or season.get("season") or "Sezon"
-            label = f"{league_name} {year}" + (f" — {country}" if country else "")
-            options.append({"label": label, "league_id": season.get("id"), "league_name": league_name, "season": year})
-    options.sort(key=lambda x: x["label"].lower())
-    return options, None
-
-@st.cache_data(ttl=300, show_spinner=False)
-def footystats_league_matches(league_id):
-    payload, err = footystats_get("league-matches", {"league_id": str(league_id)})
-    if err or not isinstance(payload, dict):
-        return [], err or "FootyStats lig maçları yanıtı okunamadı"
-    items = payload.get("data") or []
-    if isinstance(items, dict):
-        items = [items]
-    if not isinstance(items, list):
-        return [], "FootyStats maç listesi beklenen biçimde değil"
-    return items, None
-
-@st.cache_data(ttl=300, show_spinner=False)
-def footystats_today_matches(date_text):
-    # FootyStats defaults to UTC and only returns leagues selected in account settings.
-    payload, err = footystats_get("todays-matches", {"date": date_text, "timezone": "Europe/Istanbul"})
-    if err or not isinstance(payload, dict):
-        return [], err or "FootyStats fikstür yanıtı okunamadı"
-    items = payload.get("data") or []
-    if not isinstance(items, list):
-        items = []
-    if not items:
-        pager = payload.get("pager") or {}
-        return [], f"HTTP 200; Türkiye saatiyle {date_text} için 0 maç. FootyStats hesabında API Settings bölümünden lig seçimini kontrol et. Sayfalama toplamı: {pager.get(chr(116)+chr(111)+chr(116)+chr(97)+chr(108)+chr(95)+chr(114)+chr(101)+chr(115)+chr(117)+chr(108)+chr(116)+chr(115), 0)}."
-    return items, None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def football_data_get(path, params=None):
@@ -602,7 +516,7 @@ def espn_scoreboard_for_date(date_text, league_code):
     try:
         response = requests.get(
             f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/scoreboard",
-            params={"dates": str(date_text).replace("-", ""), "limit": 100},
+            params={"dates": (str(date_text) if len(str(date_text)) == 17 and str(date_text)[8] == "-" else str(date_text).replace("-", "")), "limit": 500},
             headers={"User-Agent": "Mozilla/5.0"}, timeout=15
         )
         if response.status_code != 200:
@@ -691,6 +605,40 @@ def espn_scoreboard_for_date(date_text, league_code):
         message = f"ESPN bağlantı hatası: {exc}"
         set_provider_status("ESPN", True, False, message[:180])
         return [], message
+
+@st.cache_data(ttl=900, show_spinner=False)
+def espn_team_last_matches(team_query, league_code, days_back=120):
+    """Best-effort recent team form from ESPN's public scoreboard date-range response."""
+    try:
+        from datetime import timedelta
+        end_date = date.today()
+        start_date = end_date - timedelta(days=int(days_back))
+        range_text = f"{start_date.strftime('%Y%m%d')}-{end_date.strftime('%Y%m%d')}"
+        matches, err = espn_scoreboard_for_date(range_text, league_code)
+        if err:
+            return [], err
+        wanted = normalize_team_key(team_query)
+        found = []
+        for item in matches or []:
+            teams = item.get("teams") or {}
+            home = (teams.get("home") or {}).get("name") or ""
+            away = (teams.get("away") or {}).get("name") or ""
+            if wanted not in normalize_team_key(home) and wanted not in normalize_team_key(away):
+                continue
+            status = (item.get("fixture") or {}).get("status") or {}
+            goals = item.get("goals") or {}
+            gh, ga = goals.get("home"), goals.get("away")
+            if status.get("short") != "FT" or gh is None or ga is None:
+                continue
+            fixture_date = (item.get("fixture") or {}).get("date") or ""
+            found.append({"date": str(fixture_date)[:10], "home": home, "away": away,
+                          "home_goals": int(gh), "away_goals": int(ga),
+                          "timestamp": str(fixture_date)})
+        found.sort(key=lambda x: x["timestamp"], reverse=True)
+        return found[:5], None
+    except (TypeError, ValueError, KeyError) as exc:
+        return [], f"ESPN takım formu verisi işlenemedi: {exc}"
+
 
 def espn_matches_for_date(date_text):
     """ESPN public scoreboards for selected major leagues; odds are never fabricated."""
@@ -2560,12 +2508,6 @@ with source_tab:
             _, of_test_err = openfootapi_live_matches()
             if of_test_err:
                 set_provider_status("OpenFootAPI", bool(str(secret("OPENFOOT_API_KEY", "")).strip()), False, of_test_err[:180])
-            # FootyStats documented test key works without an account; a user key can be stored in Secrets.
-            fs_rows, fs_err = footystats_today_matches(date.today().isoformat())
-            if fs_err:
-                set_provider_status("FootyStats", FOOTYSTATS_API_KEY != "example", False, fs_err[:180])
-            else:
-                set_provider_status("FootyStats", True, True, f"HTTP 200; bugün {len(fs_rows)} maç kaydı; " + ("demo anahtarı" if FOOTYSTATS_API_KEY == "example" else "hesap anahtarı"))
             # TheSportsDB free schedule endpoint; no secret required for public key 123.
             _, test_err = thesportsdb_matches_for_date(date.today().isoformat())
             if test_err and "bu tarihte futbol maçı döndürmedi" not in test_err:
@@ -2591,69 +2533,6 @@ with source_tab:
             except requests.RequestException as exc:
                 set_provider_status("OpenLigaDB", True, False, f"Bağlantı hatası: {exc}"[:180])
         st.success("Bağlantı testleri tamamlandı. Sonuçları aşağıdaki tabloda görebilirsin.")
-    if st.button("⚽ FootyStats ücretsiz API denemesini test et", key="test_footystats"):
-        with st.spinner("FootyStats test anahtarıyla bugünün maçları sorgulanıyor..."):
-            fs_rows, fs_err = footystats_today_matches(date.today().isoformat())
-            if fs_err:
-                st.error(fs_err)
-            else:
-                st.success(f"FootyStats API yanıt verdi. Bugün için {len(fs_rows)} kayıt döndü.")
-                if fs_rows:
-                    st.dataframe([{
-                        "Maç ID": x.get("id", "—"),
-                        "Ev sahibi": x.get("home_name") or x.get("homeID") or "—",
-                        "Deplasman": x.get("away_name") or x.get("awayID") or "—",
-                        "Durum": x.get("status", "—"),
-                        "Ev gol": x.get("homeGoalCount", "—"),
-                        "Dep gol": x.get("awayGoalCount", "—"),
-                        "Başlama zamanı": x.get("date_unix", "—"),
-                        "Lig sezon ID": x.get("competition_id", "—"),
-                    } for x in fs_rows[:50]], use_container_width=True, hide_index=True)
-                else:
-                    st.info("API bağlantısı çalıştı ancak seçilen gün için demo/hesap kapsamında maç dönmedi.")
-                st.caption("Not: 'example' anahtarı bağlantı/örnek veriyi test etmek içindir. Gerçek ücretsiz deneme hesabı anahtarını FOOTYSTATS_API_KEY olarak Secrets'a ekleyince gerçek kapsam test edilir.")
-    st.divider()
-    st.subheader("FootyStats — lig ve sezon seç")
-    st.caption("Bu liste, FootyStats hesabında API erişimi için seçilmiş ligleri gösterir. Ücretsiz denemede kapsam yalnızca hesabın izin verdiği liglerle sınırlı olabilir.")
-    if st.button("FootyStats lig listesini yükle", key="load_footystats_leagues"):
-        with st.spinner("Hesabındaki kullanılabilir ligler alınıyor..."):
-            league_options, league_err = footystats_league_options()
-            st.session_state["footystats_league_options"] = league_options
-            st.session_state["footystats_league_error"] = league_err
-    if st.session_state.get("footystats_league_error"):
-        st.warning(st.session_state["footystats_league_error"])
-    league_options = st.session_state.get("footystats_league_options", [])
-    if league_options:
-        label_to_option = {x["label"]: x for x in league_options}
-        chosen_label = st.selectbox("Lig / sezon", list(label_to_option.keys()), key="footystats_selected_league")
-        chosen_option = label_to_option[chosen_label]
-        if st.button("Seçili lig maçlarını getir", key="load_footystats_league_matches"):
-            with st.spinner("Seçili lig için maçlar alınıyor..."):
-                fs_league_matches, fs_league_err = footystats_league_matches(chosen_option["league_id"])
-                st.session_state["footystats_selected_matches"] = fs_league_matches
-                st.session_state["footystats_selected_matches_error"] = fs_league_err
-                st.session_state["footystats_selected_matches_label"] = chosen_label
-        if st.session_state.get("footystats_selected_matches_error"):
-            st.warning(st.session_state["footystats_selected_matches_error"])
-        elif st.session_state.get("footystats_selected_matches_label") == chosen_label and "footystats_selected_matches" in st.session_state:
-            selected_matches = st.session_state.get("footystats_selected_matches", [])
-            st.caption(f"{chosen_label}: {len(selected_matches)} maç kaydı")
-            if selected_matches:
-                st.dataframe([{
-                    "Tarih": x.get("date_unix", x.get("date", "—")),
-                    "Ev sahibi": x.get("home_name", x.get("homeID", "—")),
-                    "Deplasman": x.get("away_name", x.get("awayID", "—")),
-                    "Durum": x.get("status", "—"),
-                    "Ev gol": x.get("homeGoalCount", "—"),
-                    "Dep gol": x.get("awayGoalCount", "—"),
-                    "Toplam gol": x.get("totalGoalCount", "—"),
-                    "Korner": x.get("totalCornerCount", "—"),
-                    "Lig ID": x.get("competition_id", chosen_option["league_id"]),
-                } for x in selected_matches[:100]], use_container_width=True, hide_index=True)
-            else:
-                st.info("Bu lig/sezon için API maç listesi boş döndü.")
-    elif "footystats_league_options" in st.session_state and not st.session_state.get("footystats_league_error"):
-        st.info("Hesabında seçilmiş lig bulunamadı. FootyStats API Settings sayfasında lig seçimini kontrol et; ücretsiz denemede bazı hesaplarda yalnızca Premier League açılır.")
     provider_status_table()
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
@@ -2667,89 +2546,61 @@ with source_tab:
 
 with analytics_tab:
     st.subheader("Takım formu ve oyuncu analizi")
-    st.caption("API-Football v3 devre dışı bırakıldı. Takım formu gerçek FootyStats hesap verisinden; oyuncu profili/istatistikleri TheSportsDB yanıt verirse gösterilir. Eksik alanlar tahmin edilmez.")
+    st.caption("API-Football v3 ve FootyStats kaldırıldı. Takım formu ESPN skor panosundan; oyuncu profili ve varsa istatistikleri TheSportsDB üzerinden sorgulanır. Eksik alanlar tahmin edilmez.")
 
     team_col, player_col = st.columns(2)
     with team_col:
         st.markdown("### 🛡️ Takım formu")
-        st.write("Son maç analizi için FootyStats hesabında erişime açık lig/sezon kayıtları gerekir.")
-        if not FOOTYSTATS_API_KEY:
-            st.warning("FOOTYSTATS_API_KEY tanımlı değil. Takım formu için gerçek FootyStats anahtarını uygulamanın Secrets bölümüne ekle; 'example' anahtarı gerçek maç verisi olarak kullanılmaz.")
-        if st.button("FootyStats liglerini yükle", key="analytics_load_fs_leagues"):
-            with st.spinner("Hesapta açık ligler kontrol ediliyor..."):
-                opts, err = footystats_league_options()
-                st.session_state["analytics_fs_leagues"] = opts
-                st.session_state["analytics_fs_leagues_error"] = err
-        if st.session_state.get("analytics_fs_leagues_error"):
-            st.warning(st.session_state["analytics_fs_leagues_error"])
-        fs_options = st.session_state.get("analytics_fs_leagues", [])
-        if fs_options:
-            fs_labels = {x["label"]: x for x in fs_options}
-            fs_label = st.selectbox("Lig / sezon", list(fs_labels.keys()), key="analytics_fs_league")
-            team_query = st.text_input("Takım adı", placeholder="Örn. Galatasaray", key="analytics_team_query")
-            if st.button("Takımın son 5 maçını analiz et", key="analytics_team_analyze") and team_query.strip():
-                with st.spinner("Seçili ligin maç kayıtları alınıyor..."):
-                    matches, err = footystats_league_matches(fs_labels[fs_label]["league_id"])
-                if err:
-                    st.session_state["analytics_team_form_error"] = err
-                    st.session_state["analytics_team_form"] = []
+        st.caption("Takımın son maçları ESPN'in herkese açık skor panosundan sorgulanır. Kapsam lig ve tarih aralığına bağlıdır.")
+        league_choices = {
+            "Türkiye Süper Lig": "tur.1",
+            "İngiltere Premier League": "eng.1",
+            "İspanya La Liga": "esp.1",
+            "İtalya Serie A": "ita.1",
+            "Almanya Bundesliga": "ger.1",
+            "Fransa Ligue 1": "fra.1",
+            "Portekiz Primeira Liga": "por.1",
+            "Hollanda Eredivisie": "ned.1",
+            "İskoçya Premiership": "sco.1",
+            "ABD MLS": "usa.1",
+        }
+        selected_league = st.selectbox("Lig", list(league_choices.keys()), key="analytics_espn_league")
+        team_query = st.text_input("Takım adı", placeholder="Örn. Galatasaray", key="analytics_team_query")
+        if st.button("Son 5 maçı ve formu bul", key="analytics_team_analyze") and team_query.strip():
+            with st.spinner("ESPN'den son maçlar sorgulanıyor..."):
+                recent, recent_err = espn_team_last_matches(team_query.strip(), league_choices[selected_league])
+            st.session_state["analytics_team_form"] = recent or []
+            st.session_state["analytics_team_form_error"] = recent_err
+            st.session_state["analytics_team_form_label"] = f"{team_query.strip()} · {selected_league}"
+            st.session_state["analytics_team_form_team_query"] = team_query.strip()
+        if st.session_state.get("analytics_team_form_error"):
+            st.warning(st.session_state["analytics_team_form_error"])
+        elif st.session_state.get("analytics_team_form_label") and st.session_state.get("analytics_team_form"):
+            form = st.session_state["analytics_team_form"]
+            st.caption(st.session_state["analytics_team_form_label"])
+            wins = draws = losses = gf = ga = 0
+            rows = []
+            team_norm = normalize_team_key(st.session_state.get("analytics_team_form_team_query", ""))
+            for item in form:
+                is_home = team_norm in normalize_team_key(item["home"])
+                own, opp = (item["home_goals"], item["away_goals"]) if is_home else (item["away_goals"], item["home_goals"])
+                if own > opp:
+                    wins += 1; result = "G"
+                elif own == opp:
+                    draws += 1; result = "B"
                 else:
-                    wanted = normalize_team_key(team_query)
-                    found = []
-                    for match in matches:
-                        home = match.get("home_name") or ""
-                        away = match.get("away_name") or ""
-                        if wanted not in normalize_team_key(home) and wanted not in normalize_team_key(away):
-                            continue
-                        try:
-                            home_goals = int(match.get("homeGoalCount")) if match.get("homeGoalCount") not in (None, "") else None
-                            away_goals = int(match.get("awayGoalCount")) if match.get("awayGoalCount") not in (None, "") else None
-                        except (TypeError, ValueError):
-                            home_goals = away_goals = None
-                        if home_goals is None or away_goals is None:
-                            continue
-                        try:
-                            stamp = int(match.get("date_unix") or 0)
-                        except (TypeError, ValueError):
-                            stamp = 0
-                        found.append({"timestamp": stamp, "home": home, "away": away,
-                                      "home_goals": home_goals, "away_goals": away_goals,
-                                      "date": datetime.fromtimestamp(stamp, timezone.utc).strftime("%Y-%m-%d") if stamp else str(match.get("date", "—"))})
-                    found.sort(key=lambda x: x["timestamp"], reverse=True)
-                    st.session_state["analytics_team_form"] = found[:5]
-                    st.session_state["analytics_team_form_error"] = None
-                    st.session_state["analytics_team_form_label"] = f"{team_query.strip()} · {fs_label}"
-                    st.session_state["analytics_team_form_team_query"] = team_query.strip()
-            if st.session_state.get("analytics_team_form_error"):
-                st.error(st.session_state["analytics_team_form_error"])
-            elif st.session_state.get("analytics_team_form_label") and st.session_state.get("analytics_team_form"):
-                form = st.session_state["analytics_team_form"]
-                st.caption(st.session_state["analytics_team_form_label"])
-                wins = draws = losses = gf = ga = 0
-                rows = []
-                team_norm = normalize_team_key(st.session_state.get("analytics_team_form_team_query", ""))
-                for item in form:
-                    is_home = team_norm in normalize_team_key(item["home"])
-                    own, opp = (item["home_goals"], item["away_goals"]) if is_home else (item["away_goals"], item["home_goals"])
-                    if own > opp:
-                        wins += 1; result = "G"
-                    elif own == opp:
-                        draws += 1; result = "B"
-                    else:
-                        losses += 1; result = "M"
-                    gf += own; ga += opp
-                    rows.append({"Tarih": item["date"], "Ev sahibi": item["home"],
-                                 "Skor": f'{item["home_goals"]} - {item["away_goals"]}',
-                                 "Deplasman": item["away"], "Takım sonucu": result})
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Galibiyet", wins); c2.metric("Beraberlik", draws)
-                c3.metric("Mağlubiyet", losses); c4.metric("Atılan / yenilen", f"{gf} / {ga}")
-                st.dataframe(rows, use_container_width=True, hide_index=True)
-                st.caption("G = galibiyet, B = beraberlik, M = mağlubiyet. Yalnızca seçili ligde bulunan ve skoru tamamlanmış maçlar kullanılır.")
-            elif st.session_state.get("analytics_team_form_label"):
-                st.info("Seçilen ligde bu takım için tamamlanmış maç bulunamadı. Takım adını veya lig/sezon seçimini kontrol et.")
-        elif FOOTYSTATS_API_KEY and "analytics_fs_leagues" in st.session_state and not st.session_state.get("analytics_fs_leagues_error"):
-            st.info("Hesapta kullanılabilir lig listesi boş. FootyStats API Settings bölümünde erişime açık ligleri kontrol et.")
+                    losses += 1; result = "M"
+                gf += own; ga += opp
+                rows.append({"Tarih": item["date"], "Ev sahibi": item["home"],
+                             "Skor": f'{item["home_goals"]} - {item["away_goals"]}',
+                             "Deplasman": item["away"], "Takım sonucu": result})
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Galibiyet", wins); c2.metric("Beraberlik", draws)
+            c3.metric("Mağlubiyet", losses); c4.metric("Atılan / yenilen", f"{gf} / {ga}")
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.caption("G = galibiyet, B = beraberlik, M = mağlubiyet. Yalnızca ESPN'in tamamlandı olarak işaretlediği ve skoru bulunan maçlar sayılır.")
+        elif st.session_state.get("analytics_team_form_label"):
+            st.info("ESPN seçilen takım için bu tarih aralığında tamamlanmış maç bulamadı. Takım adını veya ligi kontrol et.")
 
     with player_col:
         st.markdown("### 👤 Oyuncu profili / istatistikleri")
@@ -2801,7 +2652,7 @@ with analytics_tab:
                     st.info("TheSportsDB bu oyuncu için istatistik kaydı döndürmedi. Maç, dakika, gol veya asist değeri uydurulmadı.")
         elif "analytics_players_found" in st.session_state and not st.session_state.get("analytics_players_error"):
             st.info("Oyuncu bulunamadı. İsmi farklı yazmayı deneyebilirsin.")
-    st.caption("Bu ekran otomatik bahis tahmini üretmez. API-Football v3 anahtarı kullanılmaz; kaynak veri döndürmezse sonuç açıkça belirtilir.")
+    st.caption("Bu ekran otomatik bahis tahmini üretmez. API-Football v3 ve FootyStats anahtarı kullanılmaz; kaynak veri döndürmezse sonuç açıkça belirtilir.")
 
 with info_tab:
     st.subheader("Program hakkında")
