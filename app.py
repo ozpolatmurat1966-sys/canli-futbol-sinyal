@@ -364,12 +364,18 @@ def espn_matches_for_date(date_text):
     leagues = ["eng.1", "esp.1", "ita.1", "ger.1", "fra.1", "por.1",
                "ned.1", "usa.1", "uefa.champions", "uefa.europa"]
     combined, errors = [], []
+    successful_sources = 0
     for league_code in leagues:
         matches, error = espn_scoreboard_for_date(date_text, league_code)
         combined.extend(matches or [])
         if error:
             errors.append(league_code + ": " + error)
-    return combined, ("; ".join(errors) if errors else None)
+        else:
+            successful_sources += 1
+    # A successful scoreboard with zero events is a valid empty result, not an API failure.
+    if successful_sources:
+        return combined, None
+    return combined, ("; ".join(errors) if errors else "ESPN kaynaklarından yanıt alınamadı.")
 
 def merge_fixture_sources(primary, supplemental):
     """Merge fixtures by normalized team names so one match is not shown twice."""
@@ -1273,13 +1279,27 @@ with live_tab:
                     data = live_espn
                     err = None
                     source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
-                elif espn_err and err:
-                    err = str(err) + " | ESPN yedeği: " + espn_err
+                    st.session_state["live_notice"] = "API-Football ana kaynağı yanıt vermedi; seçili liglerin canlı skorları ESPN üzerinden gösteriliyor."
+                elif not espn_err:
+                    # ESPN answered successfully but no supported competition is live right now.
+                    data = []
+                    err = None
+                    source = "ESPN açık skor panoları"
+                    st.session_state["live_notice"] = "API-Football kotası/bağlantısı kullanılamadı. ESPN yedeği yanıt verdi ancak desteklenen liglerde şu an canlı maç yok."
+                elif err:
+                    err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
         if err:
             st.error(err)
         else:
             st.session_state["live_matches"] = data
             st.session_state["live_source"] = source
+            if data:
+                st.session_state.pop("live_notice", None)
+            elif not st.session_state.get("live_notice"):
+                st.session_state["live_notice"] = "Canlı maç bulunamadı."
+
+    if st.session_state.get("live_notice"):
+        st.info(st.session_state["live_notice"])
     if "live_matches" in st.session_state:
         st.caption("Canlı veri kaynağı: " + st.session_state.get("live_source", "API-Football"))
         show_matches(st.session_state["live_matches"], "live")
