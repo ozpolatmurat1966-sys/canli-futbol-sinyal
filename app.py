@@ -1651,6 +1651,15 @@ with live_tab:
                 elif sm_err:
                     set_provider_status("Sportmonks", True, False, "Tamamlayıcı kaynak kullanılamadı; ana kaynak korunuyor.")
             # Empty primary response is also a fallback trigger: a successful HTTP 200 with zero fixtures must not hide other providers.
+            # Sportmonks must be tried here too: a successful but empty 5Dollar response is not a reason to skip it.
+            if not data and SPORTMONKS_API_TOKEN:
+                sm_data, sm_err = sportmonks_live_matches()
+                if not sm_err and sm_data:
+                    data = sportmonks_to_api_football(sm_data)
+                    err = None
+                    source = "Sportmonks canlı skorları (lig kapsamı plana bağlı)"
+                elif sm_err:
+                    set_provider_status("Sportmonks", True, False, str(sm_err)[:180])
             if not data:
                 if BSD_API_TOKEN:
                     bsd_data, bsd_err = bsd_live_matches()
