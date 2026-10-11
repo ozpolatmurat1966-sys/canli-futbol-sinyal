@@ -163,6 +163,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
     st.stop()
 
 API_KEY = ""  # Eski API sağlayıcısı devre dışı; dış istek yapılmaz.
+FIVE_DOLLAR_FOOTBALL_API_KEY = str(secret("FIVE_DOLLAR_FOOTBALL_API_KEY", "")).strip()
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
@@ -196,7 +197,7 @@ def provider_status_table():
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 for _name, _configured in [
-    ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+    ("API-Football", bool(API_KEY)), ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
     ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
 ]:
     set_provider_status(_name, _configured)
@@ -531,6 +532,51 @@ def merge_fixture_sources(primary, supplemental):
             merged.append(item)
             seen.add(key)
     return merged
+
+@st.cache_data(ttl=45, show_spinner=False)
+def five_dollar_live_matches():
+    """Fetch live fixtures from 5DollarFootballAPI."""
+    if not FIVE_DOLLAR_FOOTBALL_API_KEY:
+        return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
+    try:
+        response = requests.get("https://api.5dollarfootballapi.com/v1/fixtures", params={"status": "live", "per_page": 100}, headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"}, timeout=20)
+        if response.status_code != 200:
+            message = f"5DollarFootballAPI HTTP {response.status_code}: {response.text[:160]}"
+            set_provider_status("5DollarFootballAPI", True, False, message)
+            return None, message
+        payload = response.json()
+        if payload.get("success") == 0:
+            error = payload.get("error") or {}
+            message = str(error.get("message") or "API isteği başarısız.")[:160]
+            set_provider_status("5DollarFootballAPI", True, False, message)
+            return None, message
+        normalized = []
+        for item in payload.get("data") or payload.get("response") or []:
+            teams = item.get("teams") or {}
+            home_obj, away_obj = teams.get("home") or {}, teams.get("away") or {}
+            home = home_obj.get("name") if isinstance(home_obj, dict) else home_obj
+            away = away_obj.get("name") if isinstance(away_obj, dict) else away_obj
+            if not home or not away:
+                continue
+            goals = item.get("goals") or {}
+            raw_status = str(item.get("status") or item.get("state") or "in_play").lower()
+            short = "HT" if "half" in raw_status else ("FT" if raw_status in ("finished", "full_time", "ft") else "LIVE")
+            minute = item.get("minute", item.get("elapsed"))
+            try:
+                minute = int(minute) if minute is not None else None
+            except (TypeError, ValueError):
+                minute = None
+            league = item.get("league") or {}
+            if not isinstance(league, dict): league = {"name": str(league)}
+            kickoff = item.get("kickoff_utc") or item.get("date") or item.get("starting_at")
+            normalized.append({"fixture": {"id": item.get("id"), "date": kickoff, "status": {"long": raw_status, "short": short, "elapsed": minute}}, "league": {"id": league.get("id"), "name": league.get("name", "Lig bilinmiyor"), "country": (item.get("country") or {}).get("name", "") if isinstance(item.get("country"), dict) else str(item.get("country") or ""), "round": item.get("round")}, "teams": {"home": {"id": home_obj.get("id") if isinstance(home_obj, dict) else None, "name": home, "logo": home_obj.get("logo") if isinstance(home_obj, dict) else None}, "away": {"id": away_obj.get("id") if isinstance(away_obj, dict) else None, "name": away, "logo": away_obj.get("logo") if isinstance(away_obj, dict) else None}}, "goals": {"home": goals.get("home"), "away": goals.get("away")}, "corners": item.get("corners") or {}, "_source": "5DollarFootballAPI", "source": "5DollarFootballAPI", "_raw_5dollar": item})
+        set_provider_status("5DollarFootballAPI", True, True, f"HTTP 200; {len(normalized)} canlı maç.")
+        return normalized, None
+    except (requests.RequestException, ValueError) as exc:
+        message = f"5DollarFootballAPI bağlantı hatası: {exc}"
+        set_provider_status("5DollarFootballAPI", True, False, message[:160])
+        return None, message
+
 
 @st.cache_data(ttl=45, show_spinner=False)
 def bsd_live_matches():
@@ -1560,8 +1606,8 @@ with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
         with st.spinner("Canlı maçlar yükleniyor..."):
-            data, err = None, "Eski API sağlayıcısı devre dışı; alternatif kaynaklar deneniyor."
-            source = "Ücretsiz/açık skor kaynakları"
+            data, err = five_dollar_live_matches() if FIVE_DOLLAR_FOOTBALL_API_KEY else (None, "5DollarFootballAPI anahtarı tanımlı değil; açık kaynaklar deneniyor.")
+            source = "5DollarFootballAPI" if data is not None else "Ücretsiz/açık skor kaynakları"
             # Providers phrase exhausted quotas differently (e.g. "request limit for the day").
             err_text = str(err or "").lower()
             quota_exhausted = any(term in err_text for term in (
