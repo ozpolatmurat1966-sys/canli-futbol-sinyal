@@ -2719,6 +2719,7 @@ with analytics_tab:
                     st.session_state["analytics_team_form"] = found[:5]
                     st.session_state["analytics_team_form_error"] = None
                     st.session_state["analytics_team_form_label"] = f"{team_query.strip()} · {fs_label}"
+                    st.session_state["analytics_team_form_team_query"] = team_query.strip()
             if st.session_state.get("analytics_team_form_error"):
                 st.error(st.session_state["analytics_team_form_error"])
             elif st.session_state.get("analytics_team_form_label") and st.session_state.get("analytics_team_form"):
@@ -2726,7 +2727,7 @@ with analytics_tab:
                 st.caption(st.session_state["analytics_team_form_label"])
                 wins = draws = losses = gf = ga = 0
                 rows = []
-                team_norm = normalize_team_key(team_query if "team_query" in locals() else "")
+                team_norm = normalize_team_key(st.session_state.get("analytics_team_form_team_query", ""))
                 for item in form:
                     is_home = team_norm in normalize_team_key(item["home"])
                     own, opp = (item["home_goals"], item["away_goals"]) if is_home else (item["away_goals"], item["home_goals"])
