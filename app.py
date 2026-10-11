@@ -1552,7 +1552,8 @@ with live_tab:
                 "429", "ratelimit", "rate limit", "request limit", "daily limit",
                 "limit for the day", "too many requests", "reached the request limit"
             ))
-            if err and (quota_exhausted or not API_KEY):
+            if err:
+                # Any primary-provider failure (including account suspension) must trigger fallback.
                 if SPORTMONKS_API_TOKEN:
                     sm_data, sm_err = sportmonks_live_matches()
                     if not sm_err:
