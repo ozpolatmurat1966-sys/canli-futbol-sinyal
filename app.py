@@ -1659,6 +1659,7 @@ with live_tab:
             if not data and SPORTMONKS_API_TOKEN:
                 sm_data, sm_err = sportmonks_live_matches()
                 sportmonks_live_count = len(sm_data or []) if not sm_err else None
+                live_diagnostics.append({"Kaynak": "Sportmonks", "Alınan kayıt": len(sm_data or []) if not sm_err else "—", "Canlı filtresinden geçen": len(sm_data or []) if not sm_err else "—", "Not": sm_err or "Canlı skor uç noktası"})
                 if not sm_err and sm_data:
                     data = sportmonks_to_api_football(sm_data)
                     sportmonks_normalized_count = len(data or [])
@@ -1679,6 +1680,7 @@ with live_tab:
                     if str(((item.get("fixture") or {}).get("status") or {}).get("short") or "").upper()
                     in ("IN_PLAY", "PAUSED", "LIVE", "HT")
                 ]
+                live_diagnostics.append({"Kaynak": "football-data.org", "Alınan kayıt": len(fd_today or []) if not fd_err else "—", "Canlı filtresinden geçen": len(fd_live) if not fd_err else "—", "Not": fd_err or "Bugünün fikstüründe canlı/devre arası durumu"})
                 if fd_live:
                     data = fd_live
                     err = None
@@ -1689,6 +1691,7 @@ with live_tab:
             if not data:
                 if BSD_API_TOKEN:
                     bsd_data, bsd_err = bsd_live_matches()
+                    live_diagnostics.append({"Kaynak": "Bzzoiro Sports Data", "Alınan kayıt": len(bsd_data or []) if not bsd_err else "—", "Canlı filtresinden geçen": len(bsd_data or []) if not bsd_err else "—", "Not": bsd_err or "Canlı skor uç noktası"})
                     if not bsd_err:
                         data = bsd_data or []
                         err = None
@@ -1715,6 +1718,7 @@ with live_tab:
                             continue
                         item["_source"] = "TheSportsDB"
                         live_tsdb.append(item)
+                    live_diagnostics.append({"Kaynak": "TheSportsDB", "Alınan kayıt": len(tsdb_live or []) if not tsdb_err else "—", "Canlı filtresinden geçen": len(live_tsdb) if not tsdb_err else "—", "Not": tsdb_err or "LIVE/HT ve başlama zamanı filtresi"})
                     if live_tsdb:
                         data = live_tsdb
                         err = None
@@ -1741,6 +1745,8 @@ with live_tab:
                                 # Missing/invalid kickoff means we cannot safely call this match live.
                                 continue
                             live_espn.append(item)
+                        live_diagnostics.append({"Kaynak": "ESPN", "Alınan kayıt": len(espn_data or []) if not espn_err else "—", "Canlı filtresinden geçen": len(live_espn) if not espn_err else "—", "Not": espn_err or "LIVE/HT ve son 5 saat filtresi"})
+                        st.session_state["live_diagnostics"] = live_diagnostics
                         if live_espn:
                             data = live_espn
                             err = None
@@ -1775,6 +1781,10 @@ with live_tab:
 
     if st.session_state.get("live_notice"):
         st.info(st.session_state["live_notice"])
+    if st.session_state.get("live_diagnostics"):
+        with st.expander("🔎 Canlı veri teşhisi — kaynak kaynak kayıt sayıları", expanded=True):
+            st.dataframe(st.session_state["live_diagnostics"], use_container_width=True, hide_index=True)
+            st.caption("Alınan kayıt = kaynağın döndürdüğü maç/kayıt sayısı. Canlı filtresinden geçen = uygulamanın canlı kabul ettiği maç sayısı.")
     if "live_matches" in st.session_state:
         st.caption("Canlı veri kaynağı: " + st.session_state.get("live_source", "Ücretsiz/açık skor kaynakları"))
         show_matches(st.session_state["live_matches"], "live")
