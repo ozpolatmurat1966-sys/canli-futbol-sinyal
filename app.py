@@ -494,7 +494,8 @@ def espn_matches_for_date(date_text):
         "esp.1", "esp.2", "ita.1", "ita.2", "ger.1", "ger.2",
         "fra.1", "fra.2", "por.1", "ned.1", "bel.1", "sco.1",
         "usa.1", "mex.1", "arg.1", "bra.1", "aus.1", "jpn.1",
-        "uefa.champions", "uefa.europa", "uefa.europa.conf"
+        "ksa.1", "chn.1", "ind.1", "tha.1", "mys.1", "idn.1",
+        "afc.champions", "uefa.champions", "uefa.europa", "uefa.europa.conf"
     ]
     combined, errors = [], []
     successful_sources = 0
