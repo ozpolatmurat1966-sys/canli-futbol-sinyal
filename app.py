@@ -429,6 +429,83 @@ def openligadb_matches_for_date(date_text):
         return out, "OpenLigaDB bağlantısı çalıştı ancak seçilen tarihte Bundesliga / 2. Bundesliga maçı bulunmadı."
     return out, ("; ".join(errors) if errors else None)
 
+@st.cache_data(ttl=45, show_spinner=False)
+def openligadb_live_matches():
+    """Detect plausibly active German Bundesliga matches from the public OpenLigaDB feed."""
+    now_utc = datetime.now(timezone.utc)
+    today_text = now_utc.date().isoformat()
+    season = now_utc.year if now_utc.month >= 7 else now_utc.year - 1
+    out, errors, successful = [], [], 0
+    for shortcut, league_name in (("bl1", "Almanya Bundesliga"), ("bl2", "Almanya 2. Bundesliga")):
+        try:
+            response = requests.get(
+                f"https://api.openligadb.de/getmatchdata/{shortcut}/{season}",
+                timeout=12, headers={"User-Agent": "FutbolAnalizMerkezi/1.0"}
+            )
+            if response.status_code != 200:
+                errors.append(f"{shortcut}: HTTP {response.status_code}")
+                continue
+            matches = response.json()
+            successful += 1
+        except (requests.RequestException, ValueError) as exc:
+            errors.append(f"{shortcut}: {exc}")
+            continue
+        for item in matches if isinstance(matches, list) else []:
+            if item.get("matchIsFinished") is True:
+                continue
+            kickoff_text = item.get("matchDateTimeUTC") or item.get("matchDateTime")
+            if not kickoff_text:
+                continue
+            try:
+                kickoff = datetime.fromisoformat(str(kickoff_text).replace("Z", "+00:00"))
+                if kickoff.tzinfo is None:
+                    from zoneinfo import ZoneInfo
+                    kickoff = kickoff.replace(tzinfo=ZoneInfo("Europe/Berlin"))
+                kickoff = kickoff.astimezone(timezone.utc)
+                elapsed = int((now_utc - kickoff).total_seconds() // 60)
+            except (TypeError, ValueError):
+                continue
+            # Never promote future or old unfinished fixtures to live.
+            if elapsed < 0 or elapsed > 125:
+                continue
+            t1, t2 = item.get("team1") or {}, item.get("team2") or {}
+            home, away = t1.get("teamName"), t2.get("teamName")
+            if not home or not away:
+                continue
+            goals_home = goals_away = 0
+            for goal in item.get("goals") or []:
+                try:
+                    goals_home = max(goals_home, int(goal.get("scoreTeam1") or 0))
+                    goals_away = max(goals_away, int(goal.get("scoreTeam2") or 0))
+                except (TypeError, ValueError):
+                    pass
+            results = item.get("matchResults") or []
+            if results:
+                current_result = max(results, key=lambda r: int(r.get("resultOrderID") or 0))
+                try:
+                    goals_home = int(current_result.get("pointsTeam1", goals_home) or 0)
+                    goals_away = int(current_result.get("pointsTeam2", goals_away) or 0)
+                except (TypeError, ValueError):
+                    pass
+            short = "HT" if 45 <= elapsed < 60 else "LIVE"
+            out.append({
+                "fixture": {"id": f"openligadb-live-{item.get('matchID')}", "date": kickoff.isoformat(),
+                            "status": {"long": "Devre Arası" if short == "HT" else "Canlı (dakika tahmini)",
+                                       "short": short, "elapsed": min(elapsed, 90)}},
+                "teams": {"home": {"id": t1.get("teamId"), "name": str(home)},
+                          "away": {"id": t2.get("teamId"), "name": str(away)}},
+                "goals": {"home": goals_home, "away": goals_away},
+                "league": {"name": league_name, "country": "Almanya"},
+                "_source": "OpenLigaDB", "_raw_openligadb": item
+            })
+    if successful == 0:
+        message = "OpenLigaDB canlı sorgusu başarısız: " + "; ".join(errors)
+        set_provider_status("OpenLigaDB", True, False, message[:180])
+        return None, message
+    set_provider_status("OpenLigaDB", True, True, f"HTTP 200; {len(out)} olası canlı Bundesliga maçı.")
+    return out, None
+
+
 @st.cache_data(ttl=90, show_spinner=False)
 def espn_scoreboard_for_date(date_text, league_code):
     """Public ESPN scoreboard fallback; coverage is limited to selected competitions."""
@@ -1904,6 +1981,15 @@ with live_tab:
                             err = None
                             source = "OpenFootAPI canlı skorları"
                             st.session_state["live_notice"] = "OpenFootAPI canlı maçları gösteriliyor. Ücretsiz demo erişimi sınırlıdır; daha geniş erişim için OPENFOOT_API_KEY sırrı eklenebilir."
+                    if not data:
+                        oldb_live, oldb_live_err = openligadb_live_matches()
+                        live_diagnostics.append({"Kaynak": "OpenLigaDB", "Alınan kayıt": len(oldb_live or []) if not oldb_live_err else "—", "Canlı filtresinden geçen": len(oldb_live or []) if not oldb_live_err else "—", "Not": oldb_live_err or "Almanya Bundesliga / 2. Bundesliga; başlama saati penceresi"})
+                        st.session_state["live_diagnostics"] = live_diagnostics
+                        if oldb_live:
+                            data = oldb_live
+                            err = None
+                            source = "OpenLigaDB canlı maçları (Almanya; dakika tahmini)"
+                            st.session_state["live_notice"] = "OpenLigaDB canlı maçı gösteriliyor. Dakika başlama saatinden tahmin edilir; skor güncellemesi topluluk verisine bağlıdır."
                     if not data:
                         espn_data, espn_err = espn_matches_for_date(today_text)
                         # ESPN can occasionally leave an old event marked as in progress.
