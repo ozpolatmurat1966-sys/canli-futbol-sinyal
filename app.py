@@ -166,6 +166,7 @@ API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
+THESPORTSDB_API_KEY = str(secret("THESPORTSDB_API_KEY", "123")).strip() or "123"
 
 # Provider health is session-local; never display credentials.
 def set_provider_status(name, configured, ok=None, detail=None):
@@ -183,7 +184,7 @@ def provider_status_table():
     rows = []
     for name, configured in [
         ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
-        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
+        ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("TheSportsDB", True), ("ESPN", True), ("OpenLigaDB", True)
     ]:
         item = statuses.get(name, {})
         ok = item.get("ok")
@@ -288,6 +289,62 @@ def football_data_matches_for_date(date_text):
             "_source": "football-data.org", "_raw_supplemental": item
         })
     return out, None
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def thesportsdb_matches_for_date(date_text):
+    """Free TheSportsDB schedule supplement; fixture metadata only, not live advanced stats."""
+    try:
+        response = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/{THESPORTSDB_API_KEY}/eventsday.php",
+            params={"d": date_text, "s": "Soccer"}, timeout=12
+        )
+        if response.status_code != 200:
+            message = f"TheSportsDB HTTP {response.status_code}"
+            set_provider_status("TheSportsDB", True, False, message)
+            return [], message
+        payload = response.json()
+        events = payload.get("events") or []
+        out = []
+        for item in events:
+            home, away = item.get("strHomeTeam"), item.get("strAwayTeam")
+            if not home or not away:
+                continue
+            status_raw = (item.get("strStatus") or "").strip()
+            try:
+                gh = int(item.get("intHomeScore")) if item.get("intHomeScore") not in (None, "") else None
+            except (TypeError, ValueError):
+                gh = None
+            try:
+                ga = int(item.get("intAwayScore")) if item.get("intAwayScore") not in (None, "") else None
+            except (TypeError, ValueError):
+                ga = None
+            status_lower = status_raw.lower()
+            if any(x in status_lower for x in ("finished", "ft", "match over")):
+                short, long_status = "FT", "Maç Bitti"
+            elif any(x in status_lower for x in ("live", "in progress", "1h", "2h", "half")):
+                short, long_status = ("HT", "Devre Arası") if "half" in status_lower else ("LIVE", "Canlı")
+            elif any(x in status_lower for x in ("postponed", "cancelled", "canceled")):
+                short, long_status = "PST", "Ertelendi / İptal"
+            else:
+                short, long_status = "NS", "Başlamadı"
+            event_date = item.get("strTimestamp") or item.get("dateEvent") or date_text
+            if item.get("strTime") and "T" not in str(event_date):
+                event_date = f"{event_date}T{item.get('strTime')}"
+            out.append({
+                "fixture": {"id": f"tsdb-{item.get('idEvent')}", "date": event_date,
+                            "timestamp": None, "status": {"long": long_status, "short": short, "elapsed": None}},
+                "league": {"id": item.get("idLeague"), "name": item.get("strLeague") or "TheSportsDB", "country": item.get("strCountry") or ""},
+                "teams": {"home": {"id": item.get("idHomeTeam"), "name": home, "logo": item.get("strHomeTeamBadge")},
+                          "away": {"id": item.get("idAwayTeam"), "name": away, "logo": item.get("strAwayTeamBadge")}},
+                "goals": {"home": gh, "away": ga},
+                "_source": "TheSportsDB", "_raw_supplemental": item
+            })
+        set_provider_status("TheSportsDB", True, True, f"HTTP 200; {len(out)} maç kaydı.")
+        return out, None if out else "TheSportsDB yanıt verdi ancak bu tarihte futbol maçı döndürmedi."
+    except (requests.RequestException, ValueError) as exc:
+        message = f"TheSportsDB bağlantı hatası: {exc}"
+        set_provider_status("TheSportsDB", True, False, message[:180])
+        return [], message
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def openligadb_matches_for_date(date_text):
@@ -982,6 +1039,34 @@ def estimate_live_signals(match, stats):
 
 def analyze_match(match, stats, odds_rows):
     st.subheader("🤖 Otomatik maç değerlendirmesi")
+    fixture_id_for_prediction = match.get("fixture", {}).get("id")
+    if API_KEY and str(fixture_id_for_prediction or "").isdigit():
+        with st.expander("📊 API-Football model tahmini ve takım karşılaştırması", expanded=False):
+            prediction_data, prediction_err, _ = api_get("predictions", {"fixture": int(fixture_id_for_prediction)})
+            if prediction_err:
+                st.caption(f"Model tahmini alınamadı: {prediction_err}")
+            elif not prediction_data:
+                st.info("Bu maç için sağlayıcı model tahmini döndürülmedi.")
+            else:
+                prediction = prediction_data[0] if isinstance(prediction_data, list) else {}
+                comparison = prediction.get("comparison") or {}
+                predictions = prediction.get("predictions") or {}
+                winner = predictions.get("winner") or {}
+                winner_name = winner.get("name") if isinstance(winner, dict) else winner
+                if winner_name:
+                    st.markdown(f"**Sağlayıcı modelinin favorisi:** {winner_name}")
+                advice = predictions.get("advice")
+                if advice:
+                    st.write(f"**Model yorumu:** {advice}")
+                percent = predictions.get("percent") or {}
+                if percent:
+                    st.dataframe([{"Sonuç": key, "Model yüzdesi": value} for key, value in percent.items()], use_container_width=True, hide_index=True)
+                if comparison:
+                    st.markdown("**Takım karşılaştırması**")
+                    st.dataframe([{"Gösterge": key, "Ev sahibi": (value or {}).get("home") if isinstance(value, dict) else None,
+                                   "Deplasman": (value or {}).get("away") if isinstance(value, dict) else None}
+                                  for key, value in comparison.items()], use_container_width=True, hide_index=True)
+                st.caption("Bu, veri sağlayıcısının tahminidir; garanti veya kesin olasılık değildir. Kota tüketebilir.")
     goals = match.get("goals", {})
     status = match.get("fixture", {}).get("status", {})
     elapsed = status.get("elapsed")
@@ -1435,17 +1520,19 @@ with date_tab:
             primary = primary or []
             fd_matches, fd_err = football_data_matches_for_date(chosen.isoformat())
             oldb_matches, oldb_err = openligadb_matches_for_date(chosen.isoformat())
+            tsdb_matches, tsdb_err = thesportsdb_matches_for_date(chosen.isoformat())
             espn_matches, espn_err = espn_matches_for_date(chosen.isoformat())
-            combined = merge_fixture_sources(primary, (fd_matches or []) + (oldb_matches or []) + (espn_matches or []))
+            combined = merge_fixture_sources(primary, (fd_matches or []) + (oldb_matches or []) + (tsdb_matches or []) + (espn_matches or []))
             st.session_state["date_matches"] = combined
             st.session_state["date_label"] = chosen.isoformat()
             st.session_state["date_sources"] = {
-                "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or []), "ESPN": len(espn_matches or [])
+                "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or []), "TheSportsDB": len(tsdb_matches or []), "ESPN": len(espn_matches or [])
             }
             st.session_state["date_errors"] = {
                 "API-Football": api_err,
                 "football-data.org": fd_err,
                 "OpenLigaDB": oldb_err,
+                "TheSportsDB": tsdb_err,
                 "ESPN": espn_err,
             }
     if "date_matches" in st.session_state:
@@ -1491,6 +1578,12 @@ with source_tab:
                     set_provider_status("Bzzoiro Sports Data", True, False, test_err[:180])
             else:
                 set_provider_status("Bzzoiro Sports Data", False, None, "BSD_API_TOKEN yok; ücretsiz kayıt sonrası eklenebilir.")
+            # TheSportsDB free schedule endpoint; no secret required for public key 123.
+            _, test_err = thesportsdb_matches_for_date(date.today().isoformat())
+            if test_err and "bu tarihte futbol maçı döndürmedi" not in test_err:
+                set_provider_status("TheSportsDB", True, False, test_err[:180])
+            elif test_err:
+                set_provider_status("TheSportsDB", True, True, "HTTP 200; bugün maç kaydı yok.")
             # Public endpoints: test one ESPN competition and one OpenLigaDB competition.
             _, test_err = espn_scoreboard_for_date(date.today().isoformat(), "eng.1")
             if test_err:
@@ -1514,7 +1607,7 @@ with source_tab:
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
     st.write("- API-Football kota/bağlantı hatasında Sportmonks, BSD_API_TOKEN tanımlıysa Bzzoiro, ardından seçili liglerde ESPN denenir.")
-    st.write("- football-data.org, OpenLigaDB ve ESPN tamamlayıcı kaynaklardır. Bzzoiro Sports Data için BSD_API_TOKEN gerekir; ücretsiz hesap açılabilir. Hiçbiri tek başına tüm lig ve veri türlerini garanti etmez.")
+    st.write("- football-data.org, OpenLigaDB, ESPN ve TheSportsDB tamamlayıcı kaynaklardır. TheSportsDB ücretsiz uç noktası fikstür/maç metaverisi sağlar; gelişmiş canlı istatistik kaynağı değildir. Bzzoiro Sports Data için BSD_API_TOKEN gerekir. Hiçbir kaynak tek başına tüm lig ve veri türlerini garanti etmez.")
     st.write("- Sağlayıcı kotası kodla artırılamaz. Tüm kaynaklar sınırına ulaşırsa veri gecikebilir veya bulunamayabilir.")
     if st.button("Kaynak durumlarını sıfırla", key="reset_provider_status"):
         st.session_state["provider_statuses"] = {}
