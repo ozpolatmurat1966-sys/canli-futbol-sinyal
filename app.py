@@ -474,8 +474,26 @@ def espn_scoreboard_for_date(date_text, league_code):
                 short = "FT"
             elif status_name in ("STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_CANCELLED"):
                 short = "PST" if "POSTPONED" in status_name else "CANC"
+            # ESPN may leave a stale in-progress name on a completed event.
+            # Its explicit completed flag / final description takes precedence.
+            status_description = str(status.get("description") or "").strip().lower()
+            status_detail = str(status.get("shortDetail") or "").strip().lower()
+            if status.get("completed") is True or status_description in ("final", "full time", "after extra time", "after penalties") or status_detail in ("ft", "aet", "pen"):
+                short = "FT"
             period = (comp.get("status") or {}).get("period", 0)
-            minute = int(period * 45) if short == "LIVE" and period else None
+            display_clock = str((comp.get("status") or {}).get("displayClock") or "").strip()
+            # Prefer ESPN's own clock where possible; do not label a completed
+            # 90-minute match as live merely because period=2.
+            minute = None
+            if short == "LIVE":
+                if display_clock and ":" in display_clock:
+                    try:
+                        elapsed_in_period = max(0, 45 - int(display_clock.split(":")[0]))
+                        minute = int((period - 1) * 45 + elapsed_in_period) if period else elapsed_in_period
+                    except (ValueError, TypeError):
+                        minute = int(period * 45) if period else None
+                else:
+                    minute = int(period * 45) if period else None
             def score(team):
                 value = team.get("score")
                 try:
