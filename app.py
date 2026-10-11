@@ -780,12 +780,24 @@ def find_other_source_matches(match):
             candidate_live = candidate_status in ("LIVE", "1H", "2H", "HT", "ET", "P")
             if original_live and not candidate_live:
                 continue
-            if original_live and candidate_live:
-                original_goals = match.get("goals") or {}
-                candidate_goals = candidate.get("goals") or {}
-                oh, oa = original_goals.get("home"), original_goals.get("away")
-                ch, ca = candidate_goals.get("home"), candidate_goals.get("away")
-                if None not in (oh, oa, ch, ca) and (int(oh), int(oa)) != (int(ch), int(ca)):
+
+            # Compare scores whenever both providers publish them, not only when
+            # both status fields happen to be classified as live. Some feeds lag
+            # or label the 90th minute as final/live differently.
+            original_goals = match.get("goals") or {}
+            candidate_goals = candidate.get("goals") or {}
+            oh, oa = original_goals.get("home"), original_goals.get("away")
+            ch, ca = candidate_goals.get("home"), candidate_goals.get("away")
+            original_teams = match.get("teams") or {}
+            candidate_teams = candidate.get("teams") or {}
+            original_home = normalize_team_key((original_teams.get("home") or {}).get("name") or "")
+            candidate_home = normalize_team_key((candidate_teams.get("home") or {}).get("name") or "")
+            if None not in (oh, oa, ch, ca):
+                if original_home == candidate_home:
+                    aligned_scores = (int(oh), int(oa)) == (int(ch), int(ca))
+                else:
+                    aligned_scores = (int(oh), int(oa)) == (int(ca), int(ch))
+                if not aligned_scores:
                     continue
 
         key = (source, str(fixture_id))
