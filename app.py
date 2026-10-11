@@ -825,6 +825,9 @@ def apifootball_com_live_matches():
         set_provider_status("APIFootball.com", False, False, "APIFOOTBALL_API_KEY tanımlı değil.")
         return None, "APIFOOTBALL_API_KEY tanımlı değil."
     today_text = date.today().isoformat()
+    # Filter stale live flags using the kickoff time in Istanbul.
+    from zoneinfo import ZoneInfo
+    now_local = datetime.now(ZoneInfo("Europe/Istanbul"))
     try:
         response = requests.get(
             "https://apiv3.apifootball.com/",
@@ -884,6 +887,17 @@ def apifootball_com_live_matches():
             match_date = item.get("match_date") or today_text
             match_time = item.get("match_time")
             kickoff = f"{match_date}T{match_time}:00" if match_time and len(str(match_time)) == 5 else match_date
+            try:
+                kickoff_dt = datetime.fromisoformat(kickoff)
+                if kickoff_dt.tzinfo is None:
+                    kickoff_dt = kickoff_dt.replace(tzinfo=ZoneInfo("Europe/Istanbul"))
+                age_minutes = (now_local - kickoff_dt.astimezone(ZoneInfo("Europe/Istanbul"))).total_seconds() / 60
+                if age_minutes < -20 or age_minutes > 180:
+                    continue
+                if minute is not None and minute >= 90 and age_minutes > 155:
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
             normalized.append({
                 "fixture": {"id": f"apifootballcom-{item.get('match_id')}", "date": kickoff,
                             "status": {"long": long_status, "short": short, "elapsed": minute}},
@@ -2247,6 +2261,10 @@ with source_tab:
                     set_provider_status("APIFootball.com", True, False, test_err[:180])
             else:
                 set_provider_status("APIFootball.com", False, False, "APIFOOTBALL_API_KEY tanımlı değil.")
+            # Test OpenFootAPI with the configured secret without exposing it.
+            _, of_test_err = openfootapi_live_matches()
+            if of_test_err:
+                set_provider_status("OpenFootAPI", bool(str(secret("OPENFOOT_API_KEY", "")).strip()), False, of_test_err[:180])
             # TheSportsDB free schedule endpoint; no secret required for public key 123.
             _, test_err = thesportsdb_matches_for_date(date.today().isoformat())
             if test_err and "bu tarihte futbol maçı döndürmedi" not in test_err:
