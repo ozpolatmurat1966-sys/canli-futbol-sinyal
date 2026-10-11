@@ -1632,38 +1632,38 @@ with live_tab:
                         source = "TheSportsDB açık maç listesi (kapsam sınırlı; oran yok)"
                     if not data:
                         espn_data, espn_err = espn_matches_for_date(today_text)
-                    # ESPN can occasionally leave an old event marked as in progress.
-                    # Only show plausible live matches kicked off within the last five hours.
-                    now_utc = datetime.now(timezone.utc)
-                    live_espn = []
-                    for item in espn_data or []:
-                        fixture = item.get("fixture") or {}
-                        status_short = (fixture.get("status") or {}).get("short")
-                        if status_short not in ("LIVE", "HT"):
-                            continue
-                        try:
-                            kickoff = datetime.fromisoformat(str(fixture.get("date")).replace("Z", "+00:00"))
-                            if kickoff.tzinfo is None:
-                                kickoff = kickoff.replace(tzinfo=timezone.utc)
-                            age_hours = (now_utc - kickoff.astimezone(timezone.utc)).total_seconds() / 3600
-                            if age_hours < -0.25 or age_hours > 5:
+                        # ESPN can occasionally leave an old event marked as in progress.
+                        # Only show plausible live matches kicked off within the last five hours.
+                        now_utc = datetime.now(timezone.utc)
+                        live_espn = []
+                        for item in espn_data or []:
+                            fixture = item.get("fixture") or {}
+                            status_short = (fixture.get("status") or {}).get("short")
+                            if status_short not in ("LIVE", "HT"):
                                 continue
-                        except (TypeError, ValueError):
-                            # Missing/invalid kickoff means we cannot safely call this match live.
-                            continue
-                        live_espn.append(item)
-                    if live_espn:
-                        data = live_espn
-                        err = None
-                        source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
-                        st.session_state["live_notice"] = "Ana kaynaklar yanıt vermedi; seçili liglerin canlı skorları ESPN üzerinden gösteriliyor."
-                    elif not espn_err:
-                        data = []
-                        err = None
-                        source = "ESPN açık skor panoları"
-                        st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Daha geniş lig kapsamı için yeniden deneyebilir veya Tarihe göre maçlar sekmesini kullanabilirsin."
-                    elif err:
-                        err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
+                            try:
+                                kickoff = datetime.fromisoformat(str(fixture.get("date")).replace("Z", "+00:00"))
+                                if kickoff.tzinfo is None:
+                                    kickoff = kickoff.replace(tzinfo=timezone.utc)
+                                age_hours = (now_utc - kickoff.astimezone(timezone.utc)).total_seconds() / 3600
+                                if age_hours < -0.25 or age_hours > 5:
+                                    continue
+                            except (TypeError, ValueError):
+                                # Missing/invalid kickoff means we cannot safely call this match live.
+                                continue
+                            live_espn.append(item)
+                        if live_espn:
+                            data = live_espn
+                            err = None
+                            source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
+                            st.session_state["live_notice"] = "Ana kaynaklar yanıt vermedi; seçili liglerin canlı skorları ESPN üzerinden gösteriliyor."
+                        elif not espn_err:
+                            data = []
+                            err = None
+                            source = "ESPN açık skor panoları"
+                            st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Daha geniş lig kapsamı için yeniden deneyebilir veya Tarihe göre maçlar sekmesini kullanabilirsin."
+                        elif err:
+                            err = str(err) + " | ESPN yedeği de kullanılamadı: " + espn_err
         if err:
             st.error(err)
         else:
