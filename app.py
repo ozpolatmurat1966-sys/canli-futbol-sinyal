@@ -884,6 +884,56 @@ def five_dollar_live_matches():
         return None, message
 
 
+
+@st.cache_data(ttl=60, show_spinner=False)
+def five_dollar_fixture_statistics(fixture_id):
+    """Fetch real match statistics from the free-tier-supported 5DollarFootballAPI fixture endpoint."""
+    if not FIVE_DOLLAR_FOOTBALL_API_KEY:
+        return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
+    fixture_id = str(fixture_id or "").strip()
+    if not fixture_id.isdigit():
+        return None, "5DollarFootballAPI maç kimliği geçersiz."
+    try:
+        response = requests.get(
+            f"https://api.5dollarfootballapi.com/v1/fixtures/{fixture_id}/statistics",
+            headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return None, f"5DollarFootballAPI istatistik HTTP {response.status_code}: {response.text[:160]}"
+        payload = response.json()
+        if payload.get("success") == 0:
+            return None, str((payload.get("error") or {}).get("message") or "İstatistik isteği başarısız.")[:180]
+        data = payload.get("data") or {}
+        return data.get("statistics") or {}, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return None, f"5DollarFootballAPI istatistik bağlantı/JSON hatası: {exc}"
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def five_dollar_fixture_odds(fixture_id):
+    """Fetch per-fixture Bet365 odds; the free plan exposes this endpoint for supported leagues."""
+    if not FIVE_DOLLAR_FOOTBALL_API_KEY:
+        return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
+    fixture_id = str(fixture_id or "").strip()
+    if not fixture_id.isdigit():
+        return None, "5DollarFootballAPI maç kimliği geçersiz."
+    try:
+        response = requests.get(
+            f"https://api.5dollarfootballapi.com/v1/fixtures/{fixture_id}/odds",
+            headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return None, f"5DollarFootballAPI oran HTTP {response.status_code}: {response.text[:160]}"
+        payload = response.json()
+        if payload.get("success") == 0:
+            return None, str((payload.get("error") or {}).get("message") or "Oran isteği başarısız.")[:180]
+        return payload.get("data") or {}, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return None, f"5DollarFootballAPI oran bağlantı/JSON hatası: {exc}"
+
+
 @st.cache_data(ttl=45, show_spinner=False)
 def bsd_live_matches():
     """Optional Bzzoiro Sports Data live-score provider; requires BSD_API_TOKEN."""
@@ -1404,6 +1454,56 @@ def apifootball_com_detail(action, match_id):
 
 def show_stats(fixture_id, match):
     source = match.get("_source") or match.get("source")
+    if source == "5DollarFootballAPI":
+        payload, err = five_dollar_fixture_statistics(fixture_id)
+        if err:
+            st.warning(err)
+            return None
+        stats = payload or {}
+        teams = (match or {}).get("teams", {})
+        home_name = (teams.get("home") or {}).get("name", "Ev sahibi")
+        away_name = (teams.get("away") or {}).get("name", "Deplasman")
+        label_map = {
+            "attacks": "Attacks", "dangerous_attacks": "Dangerous Attacks",
+            "shots_on_target": "Shots on Goal", "shots_off_target": "Shots off Goal",
+            "possession": "Ball Possession",
+        }
+        home_rows, away_rows, table_rows = [], [], []
+        def append_pair(label, pair, prefix=""):
+            if not isinstance(pair, dict) or ("home" not in pair and "away" not in pair):
+                return
+            raw_label = label_map.get(label, label.replace("_", " ").title())
+            home_value, away_value = pair.get("home"), pair.get("away")
+            display_label = f"{prefix}{STAT_TR.get(raw_label, raw_label)}"
+            table_rows.append({"İstatistik": display_label,
+                               home_name: home_value if home_value is not None else "—",
+                               away_name: away_value if away_value is not None else "—"})
+            home_rows.append({"type": raw_label, "value": num(home_value)})
+            away_rows.append({"type": raw_label, "value": num(away_value)})
+        for key, value in stats.items():
+            if key == "first_half" and isinstance(value, dict):
+                for subkey, pair in value.items():
+                    append_pair(subkey, pair, "İlk yarı — ")
+            else:
+                append_pair(key, value)
+        # Some fixture feeds carry corners/cards on the fixture record, not statistics endpoint.
+        for key, label in (("corners", "Corner Kicks"),):
+            pair = (match or {}).get(key) or {}
+            if isinstance(pair, dict) and ("home" in pair or "away" in pair):
+                append_pair(label, pair)
+        if not table_rows:
+            st.info("5DollarFootballAPI bu maç için henüz istatistik döndürmedi.")
+            return None
+        # Derive total shots only where both on-target and off-target values are numeric.
+        h_on, h_off = stat_value(home_rows, ["Shots on Goal"]), stat_value(home_rows, ["Shots off Goal"])
+        a_on, a_off = stat_value(away_rows, ["Shots on Goal"]), stat_value(away_rows, ["Shots off Goal"])
+        if h_on is not None and h_off is not None:
+            home_rows.append({"type": "Total Shots", "value": h_on + h_off})
+            away_rows.append({"type": "Total Shots", "value": (a_on + a_off) if a_on is not None and a_off is not None else None})
+        st.subheader("Maç istatistikleri")
+        st.dataframe(table_rows, use_container_width=True, hide_index=True)
+        st.caption("Kaynak: 5DollarFootballAPI. Kapsam ücretsiz planda ilk 5 ligle sınırlıdır; eksik alanlar gösterilmez.")
+        return {"home_name": home_name, "away_name": away_name, "home_rows": home_rows, "away_rows": away_rows}
     if source == "TheSportsDB":
         event_id = str(fixture_id or "").replace("tsdb-", "").strip()
         if not event_id.isdigit():
@@ -1709,6 +1809,79 @@ def show_lineups(fixture_id, match=None):
 
 def show_odds(fixture_id, match=None):
     source = (match or {}).get("_source") or (match or {}).get("source")
+    if source == "5DollarFootballAPI":
+        payload, err = five_dollar_fixture_odds(fixture_id)
+        if err:
+            st.warning(err)
+            return []
+        bookmakers = (payload or {}).get("bookmakers") or []
+        if not bookmakers:
+            st.info("5DollarFootballAPI bu maç için oran kaydı döndürmedi.")
+            return []
+        status = ((match or {}).get("fixture") or {}).get("status") or {}
+        is_live = str(status.get("short", "")).upper() in ("LIVE", "HT", "1H", "2H", "IN_PLAY")
+        stage_order = ("inplay", "closing", "opening") if is_live else ("closing", "opening", "inplay")
+        rows = []
+        def add_price(market, option, price, bookmaker, stage, line=None):
+            odd = num(price)
+            if odd is None or odd <= 1:
+                return
+            label = f"{market} ({line})" if line is not None and market in ("Gol Alt/Üst", "Korner Alt/Üst", "Kart Alt/Üst", "Asya Handikap") else market
+            rows.append({"Pazar": label, "Seçenek": option, "Oran": odd,
+                         "Oran aşaması": stage, "Oranın ham olasılığı (%)": round(100 / odd, 1),
+                         "_odd": odd, "_market": label, "_option": option, "_bookmaker": bookmaker})
+        for book in bookmakers:
+            bookmaker = book.get("name") or book.get("slug") or "Bet365"
+            markets = book.get("odds") or {}
+            one_x_two = markets.get("1x2") or {}
+            for stage in stage_order:
+                quote = one_x_two.get(stage)
+                if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("home", "draw", "away")):
+                    for key, option in (("home", "Ev Sahibi (1)"), ("draw", "Beraberlik (X)"), ("away", "Deplasman (2)")):
+                        add_price("Maç Sonucu (1X2)", option, quote.get(key), bookmaker, stage.title())
+                    break
+            for market_key, market_label in (("goal_line", "Gol Alt/Üst"), ("corner_line", "Korner Alt/Üst"), ("card_line", "Kart Alt/Üst")):
+                market_data = markets.get(market_key) or {}
+                for stage in stage_order:
+                    quote = market_data.get(stage)
+                    if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("over", "under")):
+                        line = quote.get("line")
+                        add_price(market_label, "Üst", quote.get("over"), bookmaker, stage.title(), line)
+                        add_price(market_label, "Alt", quote.get("under"), bookmaker, stage.title(), line)
+                        break
+            asian = markets.get("asian_handicap") or {}
+            for stage in stage_order:
+                quote = asian.get(stage)
+                if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("home", "away")):
+                    line = quote.get("line")
+                    add_price("Asya Handikap", "Ev Sahibi", quote.get("home"), bookmaker, stage.title(), line)
+                    add_price("Asya Handikap", "Deplasman", quote.get("away"), bookmaker, stage.title(), line)
+                    break
+            btts = markets.get("btts") or {}
+            for stage in stage_order:
+                quote = btts.get(stage)
+                if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("yes", "no")):
+                    add_price("Karşılıklı Gol", "Evet", quote.get("yes"), bookmaker, stage.title())
+                    add_price("Karşılıklı Gol", "Hayır", quote.get("no"), bookmaker, stage.title())
+                    break
+            for fixed in markets.get("goal_line_fixed") or []:
+                if not isinstance(fixed, dict):
+                    continue
+                line = fixed.get("line")
+                for stage in stage_order:
+                    quote = fixed.get(stage)
+                    if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("over", "under")):
+                        add_price("Gol Alt/Üst", "Üst", quote.get("over"), bookmaker, stage.title(), line)
+                        add_price("Gol Alt/Üst", "Alt", quote.get("under"), bookmaker, stage.title(), line)
+                        break
+        if not rows:
+            st.info("5DollarFootballAPI yanıt verdi ancak bu maçta kullanılabilir oran bulunamadı.")
+            return []
+        st.subheader("5DollarFootballAPI gerçek oranları")
+        st.caption("Her pazar için maç durumuna uygun en güncel mevcut aşama gösterilir: canlı maçta önce canlı oran, değilse kapanış/açılış. Oranlar sağlayıcıdan gelir; tahmin değildir.")
+        st.dataframe([{k: v for k, v in row.items() if not k.startswith("_")} for row in rows], use_container_width=True, hide_index=True)
+        show_odds_comparison(rows)
+        return rows
     if source == "APIFootball.com":
         payload, err = apifootball_com_detail("get_odds", fixture_id)
         if err:
@@ -2742,15 +2915,16 @@ with source_tab:
     st.markdown("### Veri kapsamı denetimi")
     st.caption("Bu tablo kodda gerçekten bağlı olan veri yollarını gösterir; yeşil bir bağlantı testi tek başına o maç için veri bulunduğunu kanıtlamaz.")
     coverage_rows = [
-        {"Veri türü": "Fikstür / skor", "Bağlı kaynaklar": "OpenFootAPI, ESPN (seçili ligler), TheSportsDB, OpenLigaDB, SportScore; anahtara bağlı Sportmonks / APIFootball.com / football-data.org", "Sınır": "Lig kapsamı, canlı güncelleme ve kimlik eşleşmesi kaynağa göre değişir."},
+        {"Veri türü": "Fikstür / skor", "Bağlı kaynaklar": "5DollarFootballAPI (anahtar; ücretsiz planda ilk 5 lig), OpenFootAPI, ESPN (seçili ligler), TheSportsDB, OpenLigaDB, SportScore; anahtara bağlı Sportmonks / APIFootball.com / football-data.org", "Sınır": "Lig kapsamı, canlı güncelleme ve kimlik eşleşmesi kaynağa göre değişir."},
         {"Veri türü": "Son maçlar / form", "Bağlı kaynaklar": "ESPN takım son maçları; football-data.org sonuçları", "Sınır": "ESPN yalnızca seçili lig kodlarında sorgulanıyor; formun tüm liglerde otomatik hesaplanması henüz yok."},
-        {"Veri türü": "Maç istatistikleri", "Bağlı kaynaklar": "Sportmonks, APIFootball.com; TheSportsDB maç istatistikleri", "Sınır": "TheSportsDB entegrasyonu yalnızca etkinlikte kayıtlı istatistikleri verir; canlı ve tüm ligler için garanti yok."},
+        {"Veri türü": "Maç istatistikleri", "Bağlı kaynaklar": "5DollarFootballAPI (anahtar; canlı atak/şut/topa sahip olma), Sportmonks, APIFootball.com; TheSportsDB maç istatistikleri", "Sınır": "5Dollar ücretsiz planda ilk 5 lig; TheSportsDB yalnızca etkinlikte kayıtlı alanları verir."},
         {"Veri türü": "İlk 11 / kadro", "Bağlı kaynaklar": "Sportmonks, APIFootball.com; TheSportsDB maç kadrosu", "Sınır": "Kadro yayınlanmamışsa veya kaynakta yoksa gösterilemez."},
         {"Veri türü": "Oyuncu maç istatistikleri", "Bağlı kaynaklar": "APIFootball.com; eski API-Football yolu devre dışı", "Sınır": "TheSportsDB kadro/oyuncu profili, oyuncu başına canlı maç istatistiği yerine geçmez."},
-        {"Veri türü": "Bahis oranları", "Bağlı kaynaklar": "Sportmonks canlı oran uç noktası (paket erişimine bağlı), APIFootball.com", "Sınır": "OpenFootAPI, ESPN, OpenLigaDB, football-data.org ücretsiz kapsamı ve TheSportsDB bu uygulamada oran kaynağı değil."},
+        {"Veri türü": "Bahis oranları", "Bağlı kaynaklar": "5DollarFootballAPI (anahtar; ücretsiz planda Bet365 ve ilk 5 lig), Sportmonks canlı oran uç noktası (paket erişimine bağlı), APIFootball.com", "Sınır": "5Dollar oranları için sağlayıcıda o maç/lig oranı bulunmalı; OpenFootAPI, ESPN, OpenLigaDB, football-data.org ücretsiz kapsamı ve TheSportsDB oran kaynağı değil."},
         {"Veri türü": "Haber", "Bağlı kaynaklar": "Google Haberler RSS", "Sınır": "Başlık eşleşmesi; haber doğrulama veya sosyal medya duygu analizi değil."},
     ]
     st.dataframe(coverage_rows, use_container_width=True, hide_index=True)
+    st.markdown("Football data by [5DollarFootballAPI](https://5dollarfootballapi.com) · Ücretsiz planın lig ve istek sınırları geçerlidir.")
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
     st.write("- APIFootball.com ayrı bir sağlayıcıdır; APIFOOTBALL_API_KEY ile apiv2 endpointine bağlanır. Anahtar yoksa devre dışı kalır.")
