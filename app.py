@@ -489,8 +489,9 @@ def espn_scoreboard_for_date(date_text, league_code):
 
 def espn_matches_for_date(date_text):
     """ESPN public scoreboards for selected major leagues; odds are never fabricated."""
+    # Best-effort Turkish league probes; ESPN coverage is not guaranteed.
     leagues = [
-        "eng.1", "eng.2", "eng.3", "eng.4", "eng.5",
+        "tur.1", "tur.2", "eng.1", "eng.2", "eng.3", "eng.4", "eng.5",
         "esp.1", "esp.2", "ita.1", "ita.2", "ger.1", "ger.2",
         "fra.1", "fra.2", "por.1", "ned.1", "bel.1", "sco.1",
         "usa.1", "mex.1", "arg.1", "bra.1", "aus.1", "jpn.1",
@@ -1456,7 +1457,10 @@ def show_bet_candidates(stats, odds_rows, elapsed=None):
 
 def show_matches(matches, prefix):
     if not matches:
-        st.info("Bu seçim için maç bulunamadı.")
+        if prefix == "live":
+            st.info("Şu anda kontrol edilen kaynaklarda canlı maç bulunamadı. Bu, bağlantının bozuk olduğu anlamına gelmez. Günün maçları için Tarihe göre maçlar sekmesinden bugünün tarihini seçip fikstürü getir.")
+        else:
+            st.info("Bu tarih ve kaynak kombinasyonunda maç bulunamadı. Başka bir tarih deneyebilir veya kaynak durumunu kontrol edebilirsin.")
         return
     st.caption(f"Bulunan maç sayısı: {len(matches)}")
     for match in matches:
