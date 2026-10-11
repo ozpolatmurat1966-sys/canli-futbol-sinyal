@@ -1652,13 +1652,22 @@ with live_tab:
                     set_provider_status("Sportmonks", True, False, "Tamamlayıcı kaynak kullanılamadı; ana kaynak korunuyor.")
             # Empty primary response is also a fallback trigger: a successful HTTP 200 with zero fixtures must not hide other providers.
             # Sportmonks must be tried here too: a successful but empty 5Dollar response is not a reason to skip it.
+            sportmonks_live_count = None
+            sportmonks_normalized_count = None
             if not data and SPORTMONKS_API_TOKEN:
                 sm_data, sm_err = sportmonks_live_matches()
+                sportmonks_live_count = len(sm_data or []) if not sm_err else None
                 if not sm_err and sm_data:
                     data = sportmonks_to_api_football(sm_data)
-                    err = None
-                    source = "Sportmonks canlı skorları (lig kapsamı plana bağlı)"
-                elif sm_err:
+                    sportmonks_normalized_count = len(data or [])
+                    set_provider_status("Sportmonks", True, True, f"Canlı sorgu: {sportmonks_live_count} kayıt; uygulamaya aktarılan: {sportmonks_normalized_count}.")
+                    if data:
+                        err = None
+                        source = "Sportmonks canlı skorları (lig kapsamı plana bağlı)"
+                elif not sm_err:
+                    sportmonks_normalized_count = 0
+                    set_provider_status("Sportmonks", True, True, "Canlı sorgu: 0 kayıt döndü.")
+                else:
                     set_provider_status("Sportmonks", True, False, str(sm_err)[:180])
             if not data:
                 if BSD_API_TOKEN:
@@ -1727,7 +1736,12 @@ with live_tab:
                             if FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_error:
                                 st.session_state["live_notice"] = "5DollarFootballAPI başarısız oldu: " + str(five_dollar_error)[:220]
                             elif FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_returned:
-                                st.session_state["live_notice"] = "5DollarFootballAPI yanıt verdi ancak canlı maç listesi boş döndü. ESPN de canlı maç bulamadı; kaynak durumu sekmesini kontrol et."
+                                sm_note = ""
+                                if SPORTMONKS_API_TOKEN and sportmonks_live_count is not None:
+                                    sm_note = f" Sportmonks canlı sorgusu {sportmonks_live_count} kayıt döndürdü; uygulamaya aktarılan {sportmonks_normalized_count or 0} maç."
+                                elif SPORTMONKS_API_TOKEN:
+                                    sm_note = " Sportmonks canlı sorgusu da başarısız oldu; ayrıntı Kaynak durumu bölümünde."
+                                st.session_state["live_notice"] = "5DollarFootballAPI HTTP 200 verdi ancak canlı maç listesi boş döndü. ESPN de uygun canlı maç bulamadı." + sm_note + " Bu kaynakların yanıt vermesi, şu anda maç bulunduğu anlamına gelmez."
                             else:
                                 st.session_state["live_notice"] = "Ücretsiz kaynaklar yanıt verdi ancak kontrol edilen liglerde şu an canlı maç bulunamadı. Tarihe göre maçlar sekmesini kullanabilirsin."
                         elif err:
