@@ -168,6 +168,7 @@ FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
 THESPORTSDB_API_KEY = str(secret("THESPORTSDB_API_KEY", "123")).strip() or "123"
+APIFOOTBALL_API_KEY = str(secret("APIFOOTBALL_API_KEY", "")).strip()
 
 # Provider health is session-local; never display credentials.
 def set_provider_status(name, configured, ok=None, detail=None):
@@ -185,6 +186,7 @@ def provider_status_table():
     rows = []
     for name, configured in [
         ("API-Football", bool(API_KEY)),
+        ("APIFootball.com", bool(APIFOOTBALL_API_KEY)),
         ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)),
         ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
         ("football-data.org", bool(FOOTBALL_DATA_TOKEN)),
@@ -205,7 +207,7 @@ def provider_status_table():
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 for _name, _configured in [
-    ("API-Football", bool(API_KEY)), ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+    ("API-Football", bool(API_KEY)), ("APIFootball.com", bool(APIFOOTBALL_API_KEY)), ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
     ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
 ]:
     set_provider_status(_name, _configured)
@@ -814,6 +816,89 @@ def sportscore_live_matches():
         set_provider_status("SportScore", True, False, message[:180])
         return None, message
 
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def apifootball_com_live_matches():
+    """APIFootball.com (apiv2) livescore feed; uses APIkey query parameter, not API-Sports headers."""
+    if not APIFOOTBALL_API_KEY:
+        set_provider_status("APIFootball.com", False, False, "APIFOOTBALL_API_KEY tanımlı değil.")
+        return None, "APIFOOTBALL_API_KEY tanımlı değil."
+    today_text = date.today().isoformat()
+    try:
+        response = requests.get(
+            "https://apiv2.apifootball.com/",
+            params={"action": "get_events", "from": today_text, "to": today_text,
+                    "timezone": "Europe/Istanbul", "APIkey": APIFOOTBALL_API_KEY},
+            headers={"Accept": "application/json"},
+            timeout=18,
+        )
+        if response.status_code != 200:
+            message = f"APIFootball.com HTTP {response.status_code}: {response.text[:160]}"
+            set_provider_status("APIFootball.com", True, False, message)
+            return None, message
+        payload = response.json()
+        if isinstance(payload, dict):
+            # Some API errors are returned as objects instead of event arrays.
+            message = str(payload.get("error") or payload.get("message") or payload)[:180]
+            set_provider_status("APIFootball.com", True, False, message)
+            return None, message
+        if not isinstance(payload, list):
+            set_provider_status("APIFootball.com", True, False, "Beklenmeyen JSON yanıt biçimi.")
+            return None, "Beklenmeyen JSON yanıt biçimi."
+        normalized = []
+        active_terms = ("live", "1st half", "2nd half", "half time", "halftime", "extra time", "penalty")
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            live_flag = str(item.get("match_live", "")).strip().lower()
+            raw_status = str(item.get("match_status") or "").strip()
+            status_lower = raw_status.lower()
+            if live_flag not in ("1", "true", "yes") and not any(term in status_lower for term in active_terms):
+                continue
+            if any(term in status_lower for term in ("finished", "full time", "after penalties", "cancelled", "postponed")):
+                continue
+            home = item.get("match_hometeam_name")
+            away = item.get("match_awayteam_name")
+            if not home or not away:
+                continue
+            if "half time" in status_lower or "halftime" in status_lower or status_lower == "ht":
+                short, long_status = "HT", "Devre Arası"
+            else:
+                short, long_status = "LIVE", raw_status or "Canlı"
+            def score_value(value):
+                try:
+                    return int(str(value).strip())
+                except (TypeError, ValueError):
+                    return None
+            home_score = score_value(item.get("match_hometeam_score"))
+            away_score = score_value(item.get("match_awayteam_score"))
+            minute = None
+            if raw_status.isdigit():
+                minute = int(raw_status)
+            elif "+" in raw_status:
+                try:
+                    minute = int(raw_status.split("+", 1)[0].strip())
+                except ValueError:
+                    minute = None
+            match_date = item.get("match_date") or today_text
+            match_time = item.get("match_time")
+            kickoff = f"{match_date}T{match_time}:00" if match_time and len(str(match_time)) == 5 else match_date
+            normalized.append({
+                "fixture": {"id": f"apifootballcom-{item.get('match_id')}", "date": kickoff,
+                            "status": {"long": long_status, "short": short, "elapsed": minute}},
+                "teams": {"home": {"id": item.get("match_hometeam_id"), "name": str(home), "logo": item.get("team_home_badge")},
+                          "away": {"id": item.get("match_awayteam_id"), "name": str(away), "logo": item.get("team_away_badge")}},
+                "goals": {"home": home_score, "away": away_score},
+                "league": {"id": item.get("league_id"), "name": item.get("league_name") or "APIFootball.com", "country": item.get("country_name") or ""},
+                "_source": "APIFootball.com", "source": "APIFootball.com", "_raw_apifootball_com": item
+            })
+        set_provider_status("APIFootball.com", True, True, f"HTTP 200; {len(payload)} kayıt, {len(normalized)} canlı maç.")
+        return normalized, None
+    except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+        message = f"APIFootball.com bağlantı/yanıt hatası: {exc}"
+        set_provider_status("APIFootball.com", True, False, message[:180])
+        return None, message
 
 @st.cache_data(ttl=45, show_spinner=False)
 def openfootapi_live_matches():
@@ -1973,6 +2058,15 @@ with live_tab:
                             source = "SportScore canlı skorları"
                             st.session_state["live_notice"] = "Canlı skorlar SportScore üzerinden gösteriliyor. Kaynak kapsamı ve güncelleme sıklığı sağlayıcıya bağlıdır."
                     if not data:
+                        apifc_data, apifc_err = apifootball_com_live_matches()
+                        live_diagnostics.append({"Kaynak": "APIFootball.com", "Alınan kayıt": len(apifc_data or []) if not apifc_err else "—", "Canlı filtresinden geçen": len(apifc_data or []) if not apifc_err else "—", "Not": apifc_err or "match_live=1 / aktif durum filtresi"})
+                        st.session_state["live_diagnostics"] = live_diagnostics
+                        if apifc_data:
+                            data = apifc_data
+                            err = None
+                            source = "APIFootball.com canlı skorları"
+                            st.session_state["live_notice"] = "APIFootball.com canlı skorları gösteriliyor. Kapsam hesabınızın paketine bağlıdır."
+                    if not data:
                         of_data, of_err = openfootapi_live_matches()
                         live_diagnostics.append({"Kaynak": "OpenFootAPI", "Alınan kayıt": len(of_data or []) if not of_err else "—", "Canlı filtresinden geçen": len(of_data or []) if not of_err else "—", "Not": of_err or "Bugünün fikstüründe status=live"})
                         st.session_state["live_diagnostics"] = live_diagnostics
@@ -2147,6 +2241,12 @@ with source_tab:
                     set_provider_status("Bzzoiro Sports Data", True, False, test_err[:180])
             else:
                 set_provider_status("Bzzoiro Sports Data", False, None, "BSD_API_TOKEN yok; ücretsiz kayıt sonrası eklenebilir.")
+            if APIFOOTBALL_API_KEY:
+                _, test_err = apifootball_com_live_matches()
+                if test_err:
+                    set_provider_status("APIFootball.com", True, False, test_err[:180])
+            else:
+                set_provider_status("APIFootball.com", False, False, "APIFOOTBALL_API_KEY tanımlı değil.")
             # TheSportsDB free schedule endpoint; no secret required for public key 123.
             _, test_err = thesportsdb_matches_for_date(date.today().isoformat())
             if test_err and "bu tarihte futbol maçı döndürmedi" not in test_err:
@@ -2175,6 +2275,7 @@ with source_tab:
     provider_status_table()
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
+    st.write("- APIFootball.com ayrı bir sağlayıcıdır; APIFOOTBALL_API_KEY ile apiv2 endpointine bağlanır. Anahtar yoksa devre dışı kalır.")
     st.write("- API-Football kota/bağlantı hatasında Sportmonks, BSD_API_TOKEN tanımlıysa Bzzoiro, ardından seçili liglerde ESPN denenir.")
     st.write("- football-data.org, OpenLigaDB, ESPN ve TheSportsDB tamamlayıcı kaynaklardır. TheSportsDB ücretsiz uç noktası fikstür/maç metaverisi sağlar; gelişmiş canlı istatistik kaynağı değildir. Bzzoiro Sports Data için BSD_API_TOKEN gerekir. Hiçbir kaynak tek başına tüm lig ve veri türlerini garanti etmez.")
     st.write("- Sağlayıcı kotası kodla artırılamaz. Tüm kaynaklar sınırına ulaşırsa veri gecikebilir veya bulunamayabilir.")
