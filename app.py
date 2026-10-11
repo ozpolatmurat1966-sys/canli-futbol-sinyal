@@ -767,6 +767,50 @@ def merge_live_match_feeds(base_matches):
     return combined
 
 
+def normalize_team_key(value):
+    """Normalize team names for a conservative text match."""
+    import unicodedata
+    value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+    return "".join(ch for ch in value if ch.isalnum())
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def thesportsdb_search_player(query):
+    """Search player metadata through TheSportsDB's public V1 endpoint."""
+    try:
+        response = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/{THESPORTSDB_API_KEY}/searchplayers.php",
+            params={"p": query}, timeout=12
+        )
+        if response.status_code != 200:
+            return [], f"TheSportsDB oyuncu araması HTTP {response.status_code}"
+        payload = response.json()
+        players = payload.get("player") or []
+        if isinstance(players, dict):
+            players = [players]
+        set_provider_status("TheSportsDB", True, True, f"Oyuncu araması: {len(players)} kayıt.")
+        return players, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        message = f"TheSportsDB oyuncu arama hatası: {exc}"
+        set_provider_status("TheSportsDB", True, False, message[:180])
+        return [], message
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def thesportsdb_player_stats(player_id):
+    """Return provider-reported player stats without assuming a fixed schema."""
+    try:
+        response = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/{THESPORTSDB_API_KEY}/lookupplayerstats.php",
+            params={"id": player_id}, timeout=12
+        )
+        if response.status_code != 200:
+            return None, f"TheSportsDB oyuncu istatistikleri HTTP {response.status_code}"
+        return response.json(), None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return None, f"TheSportsDB oyuncu istatistikleri bağlantı/JSON hatası: {exc}"
+
+
 @st.cache_data(ttl=45, show_spinner=False)
 def five_dollar_live_matches():
     """Fetch live fixtures from 5DollarFootballAPI."""
@@ -2650,16 +2694,12 @@ with analytics_tab:
                     st.session_state["analytics_team_form_error"] = err
                     st.session_state["analytics_team_form"] = []
                 else:
-                    def _norm_team_name(value):
-                        import unicodedata
-                        value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
-                        return "".join(ch for ch in value if ch.isalnum())
-                    wanted = _norm_team_name(team_query)
+                    wanted = normalize_team_key(team_query)
                     found = []
                     for match in matches:
                         home = match.get("home_name") or ""
                         away = match.get("away_name") or ""
-                        if wanted not in _norm_team_name(home) and wanted not in _norm_team_name(away):
+                        if wanted not in normalize_team_key(home) and wanted not in normalize_team_key(away):
                             continue
                         try:
                             home_goals = int(match.get("homeGoalCount")) if match.get("homeGoalCount") not in (None, "") else None
@@ -2688,7 +2728,7 @@ with analytics_tab:
                 rows = []
                 team_norm = _norm_team_name(team_query if "team_query" in locals() else "")
                 for item in form:
-                    is_home = team_norm in _norm_team_name(item["home"])
+                    is_home = team_norm in normalize_team_key(item["home"])
                     own, opp = (item["home_goals"], item["away_goals"]) if is_home else (item["away_goals"], item["home_goals"])
                     if own > opp:
                         wins += 1; result = "G"
