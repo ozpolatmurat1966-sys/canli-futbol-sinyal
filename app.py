@@ -722,6 +722,85 @@ def normalize_team_key(value):
     value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
     return "".join(ch for ch in value if ch.isalnum())
 
+def espn_league_code_for_match(match):
+    """Map known competition metadata (or a recognized fixture-ID code) to ESPN scoreboard leagues."""
+    league = (match or {}).get("league") or {}
+    name = normalize_team_key(league.get("name", ""))
+    country = normalize_team_key(league.get("country", ""))
+    mappings = [
+        (("turkeysuperlig", "superlig", "turkey"), ("turkey", "turkiye"), "tur.1"),
+        (("englishpremierleague", "premierleague", "england"), ("england", "unitedkingdom"), "eng.1"),
+        (("laliga", "spanishlaliga", "spain"), ("spain",), "esp.1"),
+        (("seriea", "italianseriea", "italy"), ("italy",), "ita.1"),
+        (("bundesliga", "germanbundesliga", "germany"), ("germany",), "ger.1"),
+        (("ligue1", "frenchligue1", "france"), ("france",), "fra.1"),
+        (("primeiraliga", "portugal"), ("portugal",), "por.1"),
+        (("eredivisie", "netherlands"), ("netherlands",), "ned.1"),
+        (("scottishpremiership", "scotland"), ("scotland",), "sco.1"),
+        (("mls", "majorleaguesoccer", "usa"), ("usa", "unitedstates"), "usa.1"),
+        (("chileprimera", "primeradivision", "chile"), ("chile",), "chi.1"),
+        (("argentinaprimera", "argentina"), ("argentina",), "arg.1"),
+        (("brasileirao", "brazilseriea", "brazil"), ("brazil",), "bra.1"),
+    ]
+    for name_terms, country_terms, code in mappings:
+        if any(term in name for term in name_terms) or any(term in country for term in country_terms):
+            return code
+    fixture_id = str(((match or {}).get("fixture") or {}).get("id") or "").lower()
+    # Some feeds encode their competition slug in IDs (e.g. fmb_chi1_...).
+    id_codes = {
+        "chi1": "chi.1", "arg1": "arg.1", "bra1": "bra.1",
+        "eng1": "eng.1", "esp1": "esp.1", "ita1": "ita.1",
+        "ger1": "ger.1", "fra1": "fra.1", "tur1": "tur.1",
+        "usa1": "usa.1", "ned1": "ned.1", "por1": "por.1",
+    }
+    for marker, code in id_codes.items():
+        if marker in fixture_id:
+            return code
+    return None
+
+
+def show_team_form_for_match(match):
+    """Fetch recent ESPN results on demand and display actual W/D/L records, never predicted form."""
+    teams = (match or {}).get("teams") or {}
+    home = (teams.get("home") or {}).get("name") or ""
+    away = (teams.get("away") or {}).get("name") or ""
+    league_code = espn_league_code_for_match(match)
+    if not home or not away:
+        st.info("Takım isimleri eksik olduğu için form sorgulanamadı.")
+        return
+    if not league_code:
+        st.info("Bu maçın lig kodu eşleştirilemedi. Takım formu sekmesinden ESPN destekli ligi seçerek sorgulayabilirsin.")
+        return
+    st.caption(f"Form kaynağı: ESPN · Lig kodu: {league_code} · Son 5 tamamlanmış maç")
+    columns = st.columns(2)
+    for idx, team_name in enumerate((home, away)):
+        with st.spinner(f"{team_name} son maçları alınıyor..."):
+            recent, err = espn_team_last_matches(team_name, league_code)
+        with columns[idx]:
+            st.markdown(f"**{team_name}**")
+            if err:
+                st.warning(f"Form alınamadı: {err}")
+                continue
+            if not recent:
+                st.info("ESPN bu takım için son 5 tamamlanmış maçı döndürmedi.")
+                continue
+            rows = []
+            form = []
+            goals_for = goals_against = 0
+            for game in recent:
+                is_home = normalize_team_key(team_name) in normalize_team_key(game.get("home", ""))
+                gf = game.get("home_goals", 0) if is_home else game.get("away_goals", 0)
+                ga = game.get("away_goals", 0) if is_home else game.get("home_goals", 0)
+                result = "G" if gf > ga else ("B" if gf == ga else "M")
+                form.append(result)
+                goals_for += gf
+                goals_against += ga
+                rows.append({"Tarih": game.get("date", "—"), "Rakip": game.get("away") if is_home else game.get("home"),
+                             "Skor": f"{game.get('home_goals')} - {game.get('away_goals')}", "Sonuç": result})
+            st.metric("Form (yeniden eskiye)", " · ".join(form), f"{len(recent)} maç")
+            st.caption(f"Gol: {goals_for} · Yenilen: {goals_against}")
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def thesportsdb_search_player(query):
@@ -2237,19 +2316,17 @@ def show_matches(matches, prefix):
             st.write(f"**Başlama:** {fixture.get('date','Bilinmiyor')}")
             st.write(f"**Durum:** {tr_status(status.get('long', status.get('short')))}")
             show_match_news(home, away, fid)
-            c1, c2, c3, c4, c5 = st.columns(5)
             is_sportmonks = match.get("_source") == "Sportmonks"
             is_thesportsdb = match.get("_source") == "TheSportsDB"
             is_openfootapi = match.get("_source") == "OpenFootAPI"
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
             if is_openfootapi:
-                # This source only provides fixtures/live scores. Clear any old action
-                # flags so stale state cannot call unsupported detail handlers again.
+                # This source has no match details, but ESPN may still provide recent form.
                 for state_key in (f"stats_{fid}", f"lineup_{fid}", f"odds_{fid}", f"analyze_{fid}", f"players_{fid}"):
                     st.session_state.pop(state_key, None)
+                if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
+                    st.session_state[f"form_{fid}"] = True
             else:
-                # Keep supported-source actions clickable and preserve their state
-                # across Streamlit reruns so the result can render after the click.
-                c1, c2, c3, c4, c5 = st.columns(5)
                 if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
                     st.session_state[f"stats_{fid}"] = True
                 if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
@@ -2262,6 +2339,8 @@ def show_matches(matches, prefix):
                     st.session_state[f"analyze_{fid}"] = True
                 if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
                     st.session_state[f"players_{fid}"] = True
+                if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
+                    st.session_state[f"form_{fid}"] = True
             if is_openfootapi:
                 st.caption("OpenFootAPI bu maçta yalnızca canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran işlemleri bu kaynakta desteklenmiyor.")
             elif is_sportmonks:
@@ -2269,26 +2348,7 @@ def show_matches(matches, prefix):
             elif is_thesportsdb:
                 tsdb_event_id = str(fid).replace("tsdb-", "", 1)
                 st.caption("TheSportsDB fikstürü: aşağıdaki ek düğmeler bu sağlayıcının sunduğu maç istatistiklerini, kadroyu ve olay akışını sorgular. Ücretsiz uç noktalarda veri alanları/limitleri sınırlı olabilir.")
-                d1, d2, d3 = st.columns(3)
-                if d1.button("TheSportsDB istatistikleri", key=f"{prefix}_tsdb_stats_{fid}"):
-                    with st.spinner("Maç istatistikleri alınıyor..."):
-                        payload, err = thesportsdb_event_detail(tsdb_event_id, "lookupeventstats.php")
-                    if err:
-                        st.warning(err)
-                    elif payload and any(payload.values()):
-                        st.json(payload)
-                    else:
-                        st.info("Bu maç için TheSportsDB istatistik kaydı yok.")
-                if d2.button("TheSportsDB kadrosu", key=f"{prefix}_tsdb_lineup_{fid}"):
-                    with st.spinner("Kadro bilgisi alınıyor..."):
-                        payload, err = thesportsdb_event_detail(tsdb_event_id, "lookuplineup.php")
-                    if err:
-                        st.warning(err)
-                    elif payload and any(payload.values()):
-                        st.json(payload)
-                    else:
-                        st.info("Bu maç için TheSportsDB kadro kaydı yok.")
-                if d3.button("TheSportsDB olay akışı", key=f"{prefix}_tsdb_timeline_{fid}"):
+                if st.button("TheSportsDB olay akışı", key=f"{prefix}_tsdb_timeline_{fid}"):
                     with st.spinner("Maç olayları alınıyor..."):
                         payload, err = thesportsdb_event_detail(tsdb_event_id, "lookuptimeline.php")
                     if err:
@@ -2305,6 +2365,8 @@ def show_matches(matches, prefix):
                     st.info("Sportmonks istatistikleri yukarıdaki istatistik düğmesinden sorgulanır.")
                 else:
                     st.info(f"{current_source} için eski API istatistik uç noktası çağrılmaz; kaynak yalnızca desteklediği verileri sağlar.")
+            if st.session_state.get(f"form_{fid}"):
+                show_team_form_for_match(match)
             stats = None
             odds = []
             if st.session_state.get(f"players_{fid}"):
