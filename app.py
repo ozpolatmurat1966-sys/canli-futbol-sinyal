@@ -190,7 +190,7 @@ def sportmonks_live_matches():
             "https://api.sportmonks.com/v3/football/livescores",
             params={
                 "api_token": SPORTMONKS_API_TOKEN,
-                "include": "participants;statistics.type;lineups.player"
+                "include": "participants;statistics.type;lineups.player;periods;state;scores;odds"
             },
             timeout=20,
         )
@@ -235,7 +235,20 @@ def sportmonks_to_api_football(matches):
                 ag = score_value
         state = m.get("state") or {}
         state_name = state.get("name") or state.get("short_name") or "Canlı"
+        # Sportmonks livescores often expose the clock through periods rather than fixture.minute.
         minute = m.get("minute")
+        periods = m.get("periods") or []
+        active_periods = [p for p in periods if p.get("ticking") is True]
+        if minute is None and active_periods:
+            current_period = max(active_periods, key=lambda p: (p.get("sort_order") or 0))
+            minute = current_period.get("minutes")
+        if minute is None and periods:
+            # Last resort: use the most recently ordered period only if it has a current minute.
+            ordered_periods = sorted(periods, key=lambda p: (p.get("sort_order") or 0))
+            for period in reversed(ordered_periods):
+                if period.get("minutes") is not None and period.get("ended") is None:
+                    minute = period.get("minutes")
+                    break
         normalized.append({
             "fixture": {"id": m.get("id"), "date": m.get("starting_at"),
                         "status": {"long": state_name, "short": state.get("short_name"), "elapsed": minute}},
