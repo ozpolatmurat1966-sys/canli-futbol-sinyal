@@ -468,19 +468,69 @@ def analyze_match(match, stats, odds_rows):
     show_odds_comparison(odds_rows)
     valid_odds = [r for r in odds_rows if r.get("_odd") and r["_odd"] > 1]
     if valid_odds:
-        best_rows = {}
+        # Group markets into understandable families and keep correct-score/long-shot
+        # markets out of the shortlist so huge prices are not mistaken for value.
+        def market_family(name):
+            m = str(name or "").lower()
+            if "doğru skor" in m or "correct score" in m or "exact score" in m:
+                return "Doğru skor"
+            if "maç sonucu" in m or "match winner" in m or "1x2" in m:
+                return "Maç sonucu"
+            if "çifte şans" in m or "double chance" in m:
+                return "Çifte şans"
+            if "beraberlikte iade" in m or "draw no bet" in m:
+                return "Beraberlikte iade"
+            if "karşılıklı gol" in m or "both teams" in m:
+                return "Karşılıklı gol"
+            if "alt/üst" in m or "over/under" in m or "gol alt" in m or "toplam gol" in m:
+                return "Gol alt/üst"
+            if "korner" in m or "corner" in m:
+                return "Korner"
+            if "kart" in m or "card" in m:
+                return "Kart"
+            if "ilk yarı" in m or "first half" in m or "devre" in m:
+                return "İlk yarı"
+            return "Diğer pazarlar"
+
+        family_rows = {}
         for row in valid_odds:
+            family_rows.setdefault(market_family(row.get("_market")), []).append(row)
+        st.markdown("**Pazar gruplarına göre oran özeti**")
+        st.caption("Doğru skor gibi yüksek riskli pazarlar ayrı tutulur. Bu özet oran karşılaştırmasıdır; tek başına bahis tavsiyesi değildir.")
+        family_summary = []
+        for family, rows in sorted(family_rows.items()):
+            family_summary.append({
+                "Pazar grubu": family,
+                "Oran kaydı": len(rows),
+                "En düşük oran": min(r["_odd"] for r in rows),
+                "En yüksek oran": max(r["_odd"] for r in rows),
+                "Sağlayıcı sayısı": len(set(r.get("_bookmaker", "—") for r in rows)),
+            })
+        st.dataframe(family_summary, use_container_width=True, hide_index=True)
+
+        main_families = {"Maç sonucu", "Çifte şans", "Beraberlikte iade",
+                         "Karşılıklı gol", "Gol alt/üst", "Korner", "Kart", "İlk yarı"}
+        shortlist = {}
+        for row in valid_odds:
+            family = market_family(row.get("_market"))
+            if family not in main_families:
+                continue
             key = (row.get("_market", "Pazar"), row.get("_option", "—"))
-            if key not in best_rows or row["_odd"] > best_rows[key]["_odd"]:
-                best_rows[key] = row
-        top = sorted(best_rows.values(), key=lambda r: r["_odd"], reverse=True)[:12]
-        st.markdown("**Karşılaştırmada öne çıkan mevcut oranlar**")
-        st.caption("Bu liste en yüksek oranları gösterir; yüksek oran, sonucun daha olası olduğu anlamına gelmez.")
-        st.dataframe([{
-            "Pazar": r["_market"], "Seçenek": r["_option"], "En iyi oran": r["_odd"],
-            "Ham olasılık (%)": round(100/r["_odd"], 1),
-            "Sağlayıcı": r["_bookmaker"]
-        } for r in top], use_container_width=True, hide_index=True)
+            if key not in shortlist or row["_odd"] > shortlist[key]["_odd"]:
+                shortlist[key] = row
+        if shortlist:
+            st.markdown("**Karşılaştırılabilir ana pazarlar**")
+            st.dataframe([{
+                "Pazar": r["_market"], "Seçenek": r["_option"], "En iyi oran": r["_odd"],
+                "Ham olasılık (%)": round(100/r["_odd"], 1),
+                "Sağlayıcı": r["_bookmaker"]
+            } for r in sorted(shortlist.values(), key=lambda r: (market_family(r.get("_market")), r["_market"], r["_option"]))[:30]],
+                use_container_width=True, hide_index=True)
+        else:
+            st.info("Mevcut oranlar arasında ana pazarlar eşleştirilemedi. Diğer pazarlar ayrı oran tablosunda kalıyor.")
+        correct_score_count = sum(1 for r in valid_odds if market_family(r.get("_market")) == "Doğru skor")
+        if correct_score_count:
+            st.caption(f"Doğru skor pazarında {correct_score_count} oran kaydı ayrıca mevcut; bu oranlar ana pazar kısa listesine alınmadı.")
     else:
         st.info("Oran verisi olmadığı için karşılaştırma yapılamadı.")
 
