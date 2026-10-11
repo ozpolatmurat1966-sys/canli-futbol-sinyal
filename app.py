@@ -464,6 +464,17 @@ def espn_scoreboard_for_date(date_text, league_code):
                           "STATUS_CANCELED":"CANC"}
             short = status_map.get(status_name, "NS")
             period = (comp.get("status") or {}).get("period", 0)
+            # ESPN status can use newer / alternate names; retain the provider's
+            # state rather than silently converting unknown active states to scheduled.
+            if status_name in ("STATUS_IN_PROGRESS", "STATUS_FIRST_HALF", "STATUS_SECOND_HALF", "STATUS_EXTRA_TIME", "STATUS_PENALTY_SHOOTOUT"):
+                short = "LIVE"
+            elif status_name in ("STATUS_HALFTIME", "STATUS_END_PERIOD"):
+                short = "HT"
+            elif status_name in ("STATUS_FINAL", "STATUS_FULL_TIME", "STATUS_FINAL_AET", "STATUS_FINAL_PEN"):
+                short = "FT"
+            elif status_name in ("STATUS_POSTPONED", "STATUS_CANCELED", "STATUS_CANCELLED"):
+                short = "PST" if "POSTPONED" in status_name else "CANC"
+            period = (comp.get("status") or {}).get("period", 0)
             minute = int(period * 45) if short == "LIVE" and period else None
             def score(team):
                 value = team.get("score")
@@ -1745,7 +1756,24 @@ with live_tab:
                                 # Missing/invalid kickoff means we cannot safely call this match live.
                                 continue
                             live_espn.append(item)
-                        live_diagnostics.append({"Kaynak": "ESPN", "Alınan kayıt": len(espn_data or []) if not espn_err else "—", "Canlı filtresinden geçen": len(live_espn) if not espn_err else "—", "Not": espn_err or "LIVE/HT ve son 5 saat filtresi"})
+                        espn_status_counts = {}
+                        espn_age_rejected = 0
+                        espn_missing_kickoff = 0
+                        for candidate in espn_data or []:
+                            f = candidate.get("fixture") or {}
+                            s = str(((f.get("status") or {}).get("short") or "UNKNOWN")).upper()
+                            espn_status_counts[s] = espn_status_counts.get(s, 0) + 1
+                            if s in ("LIVE", "HT"):
+                                try:
+                                    ko = datetime.fromisoformat(str(f.get("date")).replace("Z", "+00:00"))
+                                    if ko.tzinfo is None:
+                                        ko = ko.replace(tzinfo=timezone.utc)
+                                    age = (now_utc - ko.astimezone(timezone.utc)).total_seconds() / 3600
+                                    if age < -0.25 or age > 5:
+                                        espn_age_rejected += 1
+                                except (TypeError, ValueError):
+                                    espn_missing_kickoff += 1
+                        live_diagnostics.append({"Kaynak": "ESPN", "Alınan kayıt": len(espn_data or []) if not espn_err else "—", "Canlı filtresinden geçen": len(live_espn) if not espn_err else "—", "Not": (espn_err or f"Durumlar: {espn_status_counts}; saat filtresinden elenen: {espn_age_rejected}; saati eksik: {espn_missing_kickoff}")})
                         st.session_state["live_diagnostics"] = live_diagnostics
                         if live_espn:
                             data = live_espn
@@ -1755,7 +1783,7 @@ with live_tab:
                         elif not espn_err:
                             data = []
                             err = None
-                            source = "ESPN açık skor panoları"
+                            source = "Canlı maç bulunamadı"
                             if FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_error:
                                 st.session_state["live_notice"] = "5DollarFootballAPI başarısız oldu: " + str(five_dollar_error)[:220]
                             elif FIVE_DOLLAR_FOOTBALL_API_KEY and five_dollar_returned:
