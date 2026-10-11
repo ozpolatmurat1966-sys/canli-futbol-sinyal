@@ -810,7 +810,13 @@ with live_tab:
         with st.spinner("Canlı maçlar yükleniyor..."):
             data, err, _ = api_get("fixtures", {"live": "all"})
             source = "API-Football"
-            if err and ("429" in err or "rateLimit" in err or "daily request limit" in err.lower()):
+            # Providers phrase exhausted quotas differently (e.g. "request limit for the day").
+            err_text = str(err or "").lower()
+            quota_exhausted = any(term in err_text for term in (
+                "429", "ratelimit", "rate limit", "request limit", "daily limit",
+                "limit for the day", "too many requests", "reached the request limit"
+            ))
+            if err and quota_exhausted:
                 if SPORTMONKS_API_TOKEN:
                     sm_data, sm_err = sportmonks_live_matches()
                     if not sm_err and sm_data:
@@ -818,9 +824,11 @@ with live_tab:
                         err = None
                         source = "Sportmonks (ücretsiz lig kapsamı sınırlı)"
                     elif sm_err:
-                        err = f"API-Football günlük limitini doldurdu. Sportmonks yedeği de kullanılamadı: {sm_err}"
+                        err = f"API-Football kotası dolu. Sportmonks yedeği de kullanılamadı: {sm_err}"
                     else:
-                        err = "API-Football günlük limiti dolu; Sportmonks şu anda canlı maç döndürmedi. Ücretsiz kapsam sınırlıdır."
+                        err = "API-Football kotası dolu; Sportmonks şu anda canlı maç döndürmedi. Ücretsiz kapsam sınırlıdır."
+                else:
+                    err = "API-Football kotası dolu ve SPORTMONKS_API_TOKEN tanımlı değil. Streamlit Secrets bölümündeki anahtar adını kontrol et."
         if err:
             st.error(err)
         else:
