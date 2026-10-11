@@ -26,6 +26,8 @@ STATUS_TR = {
     "Match Finished": "Maç Bitti", "Not Started": "Başlamadı", "Extra Time": "Uzatmalar",
     "Penalty": "Penaltılar", "Postponed": "Ertelendi", "Cancelled": "İptal",
     "Match Suspended": "Durduruldu", "Live": "Canlı", "In Progress": "Devam Ediyor",
+    "1st Half": "İlk Yarı", "2nd Half": "İkinci Yarı", "BT": "Devre Arası", "FT": "Maç Bitti",
+    "NS": "Başlamadı", "PST": "Ertelendi", "CANC": "İptal", "SUSP": "Durduruldu",
 }
 MARKET_TR = {
     "Match Winner": "Maç Sonucu (1X2)", "Home/Away": "Ev Sahibi / Deplasman",
@@ -42,6 +44,40 @@ OPTION_TR = {
     "Home/Draw": "1X", "Draw/Away": "X2", "Home/Away": "12",
     "1st Half": "İlk Yarı", "2nd Half": "İkinci Yarı",
 }
+
+# Sağlayıcı pazar adlarını, ek açıklamalar (ör. "(2nd Half)") içerse bile Türkçeleştir.
+def translate_market(value):
+    raw = str(value or "Pazar")
+    replacements = [
+        ("Asian Handicap", "Asya Handikap"), ("Match Winner", "Maç Sonucu (1X2)"),
+        ("Home/Away", "Ev Sahibi / Deplasman"), ("Second Half Winner", "İkinci Yarı Sonucu"),
+        ("First Half Winner", "İlk Yarı Sonucu"), ("Goals Over/Under", "Gol Alt/Üst"),
+        ("Both Teams Score", "Karşılıklı Gol"), ("Double Chance", "Çifte Şans"),
+        ("Draw No Bet", "Beraberlikte İade"), ("Exact Score", "Doğru Skor"),
+        ("Corners Over Under", "Korner Alt/Üst"), ("Cards Over/Under", "Kart Alt/Üst"),
+        ("Over/Under", "Alt/Üst"), ("Odd/Even", "Tek/Çift"),
+        ("Total Goals", "Toplam Gol"), ("1st Half", "İlk Yarı"), ("2nd Half", "İkinci Yarı"),
+        ("Half Time", "Devre Arası"), ("Full Time", "Maç Sonu"),
+    ]
+    for en, tr in replacements:
+        raw = raw.replace(en, tr)
+    raw = raw.replace("Corners", "Korner").replace("Cards", "Kart")
+    raw = raw.replace("Goals", "Goller").replace("Goal", "Gol")
+    raw = raw.replace("Player", "Oyuncu").replace("Shots", "Şut")
+    raw = raw.replace(" (2nd Half)", " (İkinci Yarı)").replace(" (1st Half)", " (İlk Yarı)")
+    raw = raw.replace(" (Second Half)", " (İkinci Yarı)").replace(" (First Half)", " (İlk Yarı)")
+    return raw
+
+def translate_option(value):
+    raw = str(value or "—")
+    exact = OPTION_TR.get(raw)
+    if exact:
+        return exact
+    raw = raw.replace("Home", "Ev Sahibi").replace("Away", "Deplasman")
+    raw = raw.replace("Draw", "Beraberlik").replace("Over", "Üst").replace("Under", "Alt")
+    raw = raw.replace("Yes", "Evet").replace("No", "Hayır")
+    raw = raw.replace("1st Half", "İlk Yarı").replace("2nd Half", "İkinci Yarı")
+    return raw
 
 def secret(name, default=""):
     try:
@@ -63,7 +99,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
 
 API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
 st.title("⚽ Futbol Analiz Merkezi")
-st.caption("Canlı maç • Fikstür • İstatistik • Oran hareketleri mevcutsa • Veri temelli değerlendirme")
+st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
 
 if not API_KEY:
@@ -168,13 +204,13 @@ def show_odds(fixture_id):
             st.markdown(f"**Oran sağlayıcısı: {bookmaker.get('name', 'Bilinmiyor')}**")
             for bet in bookmaker.get("bets", []):
                 market_name = bet.get("name", "Pazar")
-                market_tr = MARKET_TR.get(market_name, market_name)
+                market_tr = translate_market(MARKET_TR.get(market_name, market_name))
                 rows = []
                 for option in bet.get("values", []):
                     odd = num(option.get("odd"))
                     implied = 100 / odd if odd and odd > 0 else None
                     raw_option = option.get("value", "—")
-                    translated_option = OPTION_TR.get(raw_option, raw_option)
+                    translated_option = translate_option(raw_option)
                     row = {
                         "Pazar": market_tr, "Seçenek": translated_option,
                         "Oran": option.get("odd", "—"),
