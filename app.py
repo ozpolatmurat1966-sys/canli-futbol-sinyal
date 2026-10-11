@@ -1025,7 +1025,6 @@ def apifootball_com_live_matches():
         set_provider_status("APIFootball.com", True, False, message[:180])
         return None, message
 
-@st.cache_data(ttl=45, show_spinner=False)
 def is_fresh_live_fixture(match, max_age_hours=4):
     """Reject stale live labels when kickoff is too old or implausibly in the future."""
     fixture = match.get("fixture") or {}
@@ -1045,6 +1044,7 @@ def is_fresh_live_fixture(match, max_age_hours=4):
     return -3 * 3600 <= age <= max_age_hours * 3600
 
 
+@st.cache_data(ttl=45, show_spinner=False)
 def openfootapi_live_matches():
     """OpenFootAPI live fixtures. Uses a private Streamlit secret when configured, public demo key otherwise."""
     token = str(st.secrets.get("OPENFOOT_API_KEY", "") or "").strip()
@@ -2125,6 +2125,16 @@ def show_bet_candidates(stats, odds_rows, elapsed=None):
 
 
 def show_matches(matches, prefix):
+    # Filter again at render time so stale results already held in Streamlit session
+    # state cannot bypass the provider-level freshness check.
+    if prefix == "live" and matches:
+        matches = [
+            match for match in matches
+            if not (
+                match.get("_source") == "OpenFootAPI"
+                and not is_fresh_live_fixture(match)
+            )
+        ]
     if not matches:
         if prefix == "live":
             st.info("Şu anda kontrol edilen kaynaklarda canlı maç bulunamadı. Bu, bağlantının bozuk olduğu anlamına gelmez. Günün maçları için Tarihe göre maçlar sekmesinden bugünün tarihini seçip fikstürü getir.")
