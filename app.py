@@ -1626,8 +1626,8 @@ with date_tab:
     chosen = st.date_input("Maç tarihi", value=date.today())
     if st.button("Fikstürü getir"):
         with st.spinner("Fikstür kaynakları birleştiriliyor..."):
-            primary, api_err, _ = api_get("fixtures", {"date": chosen.isoformat()}) if API_KEY else (None, "API-Football anahtarı tanımlı değil", None)
-            primary = primary or []
+            # Eski API-Football devre dışı; ücretsiz kaynaklar kullanılır.
+            primary = []
             fd_matches, fd_err = football_data_matches_for_date(chosen.isoformat())
             oldb_matches, oldb_err = openligadb_matches_for_date(chosen.isoformat())
             tsdb_matches, tsdb_err = thesportsdb_matches_for_date(chosen.isoformat())
@@ -1636,10 +1636,9 @@ with date_tab:
             st.session_state["date_matches"] = combined
             st.session_state["date_label"] = chosen.isoformat()
             st.session_state["date_sources"] = {
-                "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or []), "TheSportsDB": len(tsdb_matches or []), "ESPN": len(espn_matches or [])
+                "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or []), "TheSportsDB": len(tsdb_matches or []), "ESPN": len(espn_matches or [])
             }
             st.session_state["date_errors"] = {
-                "API-Football": api_err,
                 "football-data.org": fd_err,
                 "OpenLigaDB": oldb_err,
                 "TheSportsDB": tsdb_err,
