@@ -169,7 +169,7 @@ SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
 THESPORTSDB_API_KEY = str(secret("THESPORTSDB_API_KEY", "123")).strip() or "123"
 APIFOOTBALL_API_KEY = str(secret("APIFOOTBALL_API_KEY", "")).strip()
-FOOTYSTATS_API_KEY = str(secret("FOOTYSTATS_API_KEY", "example")).strip() or "example"
+FOOTYSTATS_API_KEY = str(secret("FOOTYSTATS_API_KEY", "")).strip()
 
 # Provider health is session-local; never display credentials.
 def set_provider_status(name, configured, ok=None, detail=None):
@@ -251,8 +251,12 @@ def api_get(endpoint, params=None):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def footystats_get(endpoint, params=None):
-    """FootyStats API. Falls back to their documented example key for a safe connectivity/demo test."""
-    token = FOOTYSTATS_API_KEY or "example"
+    """FootyStats API. Requires the real account key; never silently substitutes the public example key."""
+    token = FOOTYSTATS_API_KEY
+    if not token:
+        message = "FOOTYSTATS_API_KEY tanımlı değil. Gerçek hesap anahtarını Streamlit Secrets bölümüne ekle; örnek anahtar otomatik kullanılmıyor."
+        set_provider_status("FootyStats", False, False, message)
+        return None, message
     query = {"key": token}
     query.update(params or {})
     try:
@@ -271,8 +275,7 @@ def footystats_get(endpoint, params=None):
             return None, message
         data = payload.get("data")
         count = len(data) if isinstance(data, list) else (1 if data else 0)
-        label = "demo anahtarı" if token == "example" else "hesap anahtarı"
-        set_provider_status("FootyStats", True, True, f"HTTP 200; {count} kayıt; {label}.")
+        set_provider_status("FootyStats", True, True, f"HTTP 200; {count} kayıt; hesap anahtarı.")
         return payload, None
     except (requests.RequestException, ValueError, TypeError) as exc:
         message = f"FootyStats bağlantı/JSON hatası: {exc}"
