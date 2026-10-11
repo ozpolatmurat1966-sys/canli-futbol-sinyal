@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 from datetime import date
 import math
+import sqlite3
+from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
 
@@ -131,14 +133,16 @@ st.title("⚽ Futbol Analiz Merkezi")
 st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
 
-if not API_KEY:
-    st.error("API anahtarı bulunamadı. Streamlit uygulama ayarlarında Secrets bölümüne API_FOOTBALL_KEY ve gerekiyorsa APP_PASSWORD ekleyin.")
-    st.code('API_FOOTBALL_KEY = "API_ANAHTARINIZ"\nAPP_PASSWORD = "KENDI_SIFRENIZ"')
+if not API_KEY and not SPORTMONKS_API_TOKEN:
+    st.error("Canlı veri için en az bir sağlayıcı anahtarı gerekli. API_FOOTBALL_KEY veya SPORTMONKS_API_TOKEN ekleyin.")
+    st.code('API_FOOTBALL_KEY = "API_ANAHTARINIZ"\nSPORTMONKS_API_TOKEN = "SPORTMONKS_TOKENINIZ"\nAPP_PASSWORD = "KENDI_SIFRENIZ"')
     st.stop()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def api_get(endpoint, params=None):
     """Cache API responses briefly so Streamlit reruns do not waste free calls."""
+    if not API_KEY:
+        return None, "API-Football anahtarı tanımlı değil.", None
     try:
         r = requests.get(f"{BASE_URL}/{endpoint}",
                          headers={"x-apisports-key": API_KEY},
@@ -272,9 +276,28 @@ def num(value):
         return None
 
 def stat_value(rows, names):
-    for row in rows:
-        if row.get("type") in names:
-            return num(row.get("value"))
+    """Read provider stat labels with common API-Football/Sportmonks aliases."""
+    aliases = {
+        "Shots on Goal": {"shots on goal", "shots on target", "on target", "isabetli şut"},
+        "Total Shots": {"total shots", "shots", "şutlar", "toplam şut"},
+        "Corner Kicks": {"corner kicks", "corners", "korner", "kornerler"},
+        "Ball Possession": {"ball possession", "ball possession %", "possession", "topla oynama"},
+        "Expected Goals": {"expected goals", "expected_goals", "xg", "beklenen gol (xg)"},
+        "Shots off Goal": {"shots off goal", "shots off target", "off target"},
+        "Fouls": {"fouls", "fauls", "faul"},
+        "Yellow Cards": {"yellow cards", "yellowcard", "sarı kart"},
+        "Red Cards": {"red cards", "redcard", "kırmızı kart"},
+    }
+    targets = set()
+    for name in names:
+        targets.add(str(name).strip().lower())
+        targets.update(aliases.get(name, set()))
+    for row in rows or []:
+        label = str(row.get("type", "")).strip().lower()
+        if label in targets:
+            value = num(row.get("value"))
+            if value is not None:
+                return value
     return None
 
 def tr_status(status):
@@ -479,6 +502,80 @@ def show_odds_comparison(odds_rows):
             st.dataframe(margin_rows, use_container_width=True, hide_index=True)
 
 
+def poisson_at_least_one(lam):
+    """Probability of one or more events under a Poisson approximation."""
+    return 1 - math.exp(-max(0.0, lam))
+
+
+def estimate_live_signals(match, stats):
+    """Transparent experimental estimates; not calibrated probabilities or betting advice."""
+    status = match.get("fixture", {}).get("status", {})
+    minute = num(status.get("elapsed"))
+    if minute is None:
+        return {"note": "Dakika verisi yok; canlı kısa-vade tahmini üretilemedi."}
+    minute = min(120.0, max(1.0, minute))
+    hr = stats.get("home_rows", []) if stats else []
+    ar = stats.get("away_rows", []) if stats else []
+    h_on, a_on = stat_value(hr, ["Shots on Goal"]), stat_value(ar, ["Shots on Goal"])
+    h_sh, a_sh = stat_value(hr, ["Total Shots"]), stat_value(ar, ["Total Shots"])
+    h_cor, a_cor = stat_value(hr, ["Corner Kicks"]), stat_value(ar, ["Corner Kicks"])
+    h_xg, a_xg = stat_value(hr, ["Expected Goals"]), stat_value(ar, ["Expected Goals"])
+
+    # Shrink observed corner pace toward a conservative generic prior to reduce small-sample noise.
+    corner_total = (h_cor + a_cor) if h_cor is not None and a_cor is not None else None
+    if corner_total is not None:
+        observed_rate = corner_total / minute
+        weight = minute / (minute + 30.0)
+        blended_rate = (0.09 * (1 - weight)) + (observed_rate * weight)
+        next10_corner = poisson_at_least_one(blended_rate * 10.0)
+    else:
+        next10_corner = None
+
+    # Baseline short-window goal hazard, with only a modest adjustment from pressure signals.
+    pressure_home = 0.0
+    pressure_away = 0.0
+    pressure_count = 0
+    if h_xg is not None and a_xg is not None:
+        pressure_home += max(0.0, h_xg) + 0.25
+        pressure_away += max(0.0, a_xg) + 0.25
+        pressure_count += 1
+    if h_on is not None and a_on is not None:
+        pressure_home += max(0.0, h_on) * 0.45 + 0.5
+        pressure_away += max(0.0, a_on) * 0.45 + 0.5
+        pressure_count += 1
+    if h_sh is not None and a_sh is not None:
+        pressure_home += max(0.0, h_sh) * 0.08 + 0.5
+        pressure_away += max(0.0, a_sh) * 0.08 + 0.5
+        pressure_count += 1
+    if pressure_count:
+        total_pressure = pressure_home + pressure_away
+        home_share = pressure_home / total_pressure if total_pressure else 0.5
+        away_share = 1 - home_share
+        # Strong shrinkage toward even chances; the provider stats are noisy and not calibrated.
+        home_share = 0.5 + (home_share - 0.5) * 0.65
+        away_share = 1 - home_share
+    else:
+        home_share = away_share = 0.5
+
+    # Heuristic short-horizon chance of any goal; not learned from historical matches.
+    goal_rate_per_minute = 0.025
+    if h_xg is not None and a_xg is not None:
+        xg_rate = (h_xg + a_xg) / minute
+        goal_rate_per_minute = 0.018 + min(0.025, max(0.0, xg_rate) * 0.20)
+    next10_goal = poisson_at_least_one(goal_rate_per_minute * 10.0)
+    home_next_goal = next10_goal * home_share
+    away_next_goal = next10_goal * away_share
+    return {
+        "minute": int(minute), "corner_total": corner_total,
+        "next10_corner_pct": round(next10_corner * 100) if next10_corner is not None else None,
+        "next10_goal_pct": round(next10_goal * 100),
+        "home_next_goal_pct": round(home_next_goal * 100),
+        "away_next_goal_pct": round(away_next_goal * 100),
+        "home_share_pct": round(home_share * 100), "away_share_pct": round(away_share * 100),
+        "data_points": pressure_count,
+    }
+
+
 def analyze_match(match, stats, odds_rows):
     st.subheader("🤖 Otomatik maç değerlendirmesi")
     goals = match.get("goals", {})
@@ -520,6 +617,20 @@ def analyze_match(match, stats, odds_rows):
         notes.append(f"Maç dakikası: {elapsed}'. Son 5/10/15 dakika ayrıntısı API tarafından ayrı olay zaman serisi olarak sunulmadıkça hesaplanamaz.")
     if elapsed is not None:
         st.write(f"**Mevcut skor:** {home_goals if home_goals is not None else '—'} - {away_goals if away_goals is not None else '—'} | **Dakika:** {elapsed}'")
+
+    st.markdown("### ⏱️ Kısa vadeli olasılık tahminleri")
+    live_est = estimate_live_signals(match, stats)
+    if live_est.get("next10_goal_pct") is not None:
+        p1, p2, p3 = st.columns(3)
+        p1.metric("Önümüzdeki 10 dk. en az 1 gol", f"%{live_est['next10_goal_pct']}")
+        p2.metric(f"Ev sahibinin sonraki gol payı", f"%{live_est['home_share_pct']}")
+        p3.metric(f"Deplasmanın sonraki gol payı", f"%{live_est['away_share_pct']}")
+        if live_est.get("next10_corner_pct") is not None:
+            st.metric("Önümüzdeki 10 dk. en az 1 korner", f"%{live_est['next10_corner_pct']}")
+        st.caption("Deneysel başlangıç tahmini: genel oran varsayımı ve mevcut maç istatistikleri kullanılır. Geçmiş maçlarda kalibre edilmediği için gerçek kazanma olasılığı veya bahis tavsiyesi değildir. Korner tahmini için iki takımın korner sayısı gerekir.")
+    else:
+        st.info(live_est.get("note", "Canlı tahmin için yeterli veri yok."))
+
     if notes:
         for n in notes: st.write("• " + n)
     elif stats:
@@ -771,12 +882,13 @@ def show_matches(matches, prefix):
                 st.session_state[f"lineup_{fid}"] = True
             if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}", disabled=is_sportmonks):
                 st.session_state[f"odds_{fid}"] = True
-            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}", disabled=is_sportmonks):
+            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
-                st.session_state[f"odds_{fid}"] = True
+                if not is_sportmonks:
+                    st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
             if is_sportmonks:
-                st.caption("Bu maç Sportmonks yedek kaynağından geldi. İstatistik/kadro denenebilir; API-Football maç ID'si olmadığı için oran ve birleşik analiz düğmeleri kapalıdır.")
+                st.caption("Bu maç Sportmonks kaynağından geldi. İstatistik/kadro ve kısa vadeli tahminler kullanılabilir; Sportmonks oran akışı bu sürümde bağlı olmadığı için oran tablosu boş kalabilir.")
             if st.button("API yanıtını kontrol et", key=f"{prefix}_diag_{fid}"):
                 with st.spinner("İstatistik API yanıtı kontrol ediliyor..."):
                     diag_data, diag_err, diag_payload = api_get("fixtures/statistics", {"fixture": fid})
@@ -799,7 +911,7 @@ def show_matches(matches, prefix):
             if st.session_state.get(f"analyze_{fid}"):
                 if stats is None:
                     stats = show_stats(fid, match)
-                if not odds:
+                if not odds and not is_sportmonks:
                     odds = show_odds(fid)
                 analyze_match(match, stats, odds)
 
@@ -808,7 +920,10 @@ with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
         with st.spinner("Canlı maçlar yükleniyor..."):
-            data, err, _ = api_get("fixtures", {"live": "all"})
+            if API_KEY:
+                data, err, _ = api_get("fixtures", {"live": "all"})
+            else:
+                data, err = None, "API-Football anahtarı tanımlı değil."
             source = "API-Football"
             # Providers phrase exhausted quotas differently (e.g. "request limit for the day").
             err_text = str(err or "").lower()
@@ -816,7 +931,7 @@ with live_tab:
                 "429", "ratelimit", "rate limit", "request limit", "daily limit",
                 "limit for the day", "too many requests", "reached the request limit"
             ))
-            if err and quota_exhausted:
+            if err and (quota_exhausted or not API_KEY):
                 if SPORTMONKS_API_TOKEN:
                     sm_data, sm_err = sportmonks_live_matches()
                     if not sm_err and sm_data:
@@ -899,7 +1014,7 @@ with info_tab:
 - Sağlayıcının sunduğu istatistiklerin Türkçe gösterimi.
 - Mevcutsa kadro ve bahis oranları.
 - Oranın ham olasılığı: 100 / oran. Bu, gerçek kazanma olasılığı değildir ve şirket marjını içerebilir.
-- **Maçı analiz et** düğmesi mevcut istatistikleri ve oranları bir araya getirir.
+- **Maçı analiz et** düğmesi mevcut istatistikleri ve oranları bir araya getirir; ayrıca kalibre edilmemiş deneysel kısa-vade gol/korner olasılığı gösterir.
 - API çağrıları kısa süre önbelleğe alınır; sayfa yenilenince ücretsiz günlük limit gereksiz yere tüketilmez.
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
