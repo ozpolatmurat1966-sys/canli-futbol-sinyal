@@ -1325,6 +1325,36 @@ def apifootball_com_detail(action, match_id):
 
 def show_stats(fixture_id, match):
     source = match.get("_source") or match.get("source")
+    if source == "TheSportsDB":
+        event_id = str(fixture_id or "").replace("tsdb-", "").strip()
+        if not event_id.isdigit():
+            st.info("TheSportsDB istatistikleri için geçerli etkinlik kimliği bulunamadı.")
+            return None
+        payload, err = thesportsdb_event_detail(event_id, "lookupeventstats.php")
+        if err:
+            st.warning(f"TheSportsDB istatistik isteği: {err}")
+            return None
+        stats = (payload or {}).get("eventstats") or []
+        if not stats:
+            st.info("TheSportsDB bu maç için istatistik döndürmedi. Bu, maç/lig verisinin eksik olduğu anlamına gelebilir.")
+            return None
+        teams = (match or {}).get("teams", {})
+        home_name = (teams.get("home") or {}).get("name", "Ev sahibi")
+        away_name = (teams.get("away") or {}).get("name", "Deplasman")
+        rows = []
+        home_rows, away_rows = [], []
+        for item in stats:
+            label = item.get("strStat") or item.get("name") or "İstatistik"
+            home_value = item.get("intHome", item.get("home"))
+            away_value = item.get("intAway", item.get("away"))
+            rows.append({"İstatistik": STAT_TR.get(label, label), home_name: home_value if home_value not in (None, "") else "—",
+                         away_name: away_value if away_value not in (None, "") else "—"})
+            home_rows.append({"type": label, "value": num(home_value)})
+            away_rows.append({"type": label, "value": num(away_value)})
+        st.subheader("Maç istatistikleri")
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.caption("Kaynak: TheSportsDB. Yalnızca sağlayıcının bu maç için döndürdüğü alanlar gösterilir.")
+        return {"home_name": home_name, "away_name": away_name, "home_rows": home_rows, "away_rows": away_rows}
     if source == "APIFootball.com":
         payload, err = apifootball_com_detail("get_statistics", fixture_id)
         if err:
@@ -1476,6 +1506,52 @@ def show_player_statistics(fixture_id, match=None):
 
 def show_lineups(fixture_id, match=None):
     source = (match or {}).get("_source") or (match or {}).get("source")
+    if source == "TheSportsDB":
+        event_id = str(fixture_id or "").replace("tsdb-", "").strip()
+        if not event_id.isdigit():
+            st.info("TheSportsDB kadrosu için geçerli etkinlik kimliği bulunamadı.")
+            return
+        payload, err = thesportsdb_event_detail(event_id, "lookuplineup.php")
+        if err:
+            st.warning(f"TheSportsDB kadro isteği: {err}")
+            return
+        lineup = (payload or {}).get("lineup") or []
+        if not lineup:
+            st.info("TheSportsDB bu maç için kadro döndürmedi. İlk 11 verisi hiç girilmemiş veya henüz yayımlanmamış olabilir.")
+            return
+        teams = (match or {}).get("teams", {})
+        home_name = (teams.get("home") or {}).get("name", "Ev sahibi")
+        away_name = (teams.get("away") or {}).get("name", "Deplasman")
+        cols = st.columns(2)
+        for idx, is_home in enumerate((True, False)):
+            team_name = home_name if is_home else away_name
+            team_rows = []
+            for player in lineup:
+                raw_home = str(player.get("strHome", "")).strip().lower()
+                player_is_home = raw_home in ("yes", "true", "1", "home")
+                if player_is_home != is_home:
+                    continue
+                substitute = str(player.get("strSubstitute", "")).strip().lower() in ("yes", "true", "1", "true")
+                team_rows.append({
+                    "Oyuncu": player.get("strPlayer") or "—",
+                    "Forma": player.get("intSquadNumber") or "—",
+                    "Pozisyon": player.get("strPosition") or "—",
+                    "Rol": "Yedek" if substitute else "İlk 11",
+                })
+            with cols[idx]:
+                st.markdown(f"**{team_name}**")
+                starters = [row for row in team_rows if row["Rol"] == "İlk 11"]
+                substitutes = [row for row in team_rows if row["Rol"] == "Yedek"]
+                if starters:
+                    st.write("**İlk 11 / bildirilen oyuncular**")
+                    st.dataframe(starters, use_container_width=True, hide_index=True)
+                else:
+                    st.info("İlk 11 kaydı bulunamadı.")
+                if substitutes:
+                    st.write("**Yedekler**")
+                    st.dataframe(substitutes, use_container_width=True, hide_index=True)
+        st.caption("Kaynak: TheSportsDB. Kadro yalnızca sağlayıcıda mevcutsa gösterilir; bu canlı kadro garantisi değildir.")
+        return
     if source == "APIFootball.com":
         payload, err = apifootball_com_detail("get_lineups", fixture_id)
         if err:
@@ -2601,6 +2677,18 @@ with source_tab:
                 set_provider_status("OpenLigaDB", True, False, f"Bağlantı hatası: {exc}"[:180])
         st.success("Bağlantı testleri tamamlandı. Sonuçları aşağıdaki tabloda görebilirsin.")
     provider_status_table()
+    st.markdown("### Veri kapsamı denetimi")
+    st.caption("Bu tablo kodda gerçekten bağlı olan veri yollarını gösterir; yeşil bir bağlantı testi tek başına o maç için veri bulunduğunu kanıtlamaz.")
+    coverage_rows = [
+        {"Veri türü": "Fikstür / skor", "Bağlı kaynaklar": "OpenFootAPI, ESPN (seçili ligler), TheSportsDB, OpenLigaDB, SportScore; anahtara bağlı Sportmonks / APIFootball.com / football-data.org", "Sınır": "Lig kapsamı, canlı güncelleme ve kimlik eşleşmesi kaynağa göre değişir."},
+        {"Veri türü": "Son maçlar / form", "Bağlı kaynaklar": "ESPN takım son maçları; football-data.org sonuçları", "Sınır": "ESPN yalnızca seçili lig kodlarında sorgulanıyor; formun tüm liglerde otomatik hesaplanması henüz yok."},
+        {"Veri türü": "Maç istatistikleri", "Bağlı kaynaklar": "Sportmonks, APIFootball.com; TheSportsDB maç istatistikleri", "Sınır": "TheSportsDB entegrasyonu yalnızca etkinlikte kayıtlı istatistikleri verir; canlı ve tüm ligler için garanti yok."},
+        {"Veri türü": "İlk 11 / kadro", "Bağlı kaynaklar": "Sportmonks, APIFootball.com; TheSportsDB maç kadrosu", "Sınır": "Kadro yayınlanmamışsa veya kaynakta yoksa gösterilemez."},
+        {"Veri türü": "Oyuncu maç istatistikleri", "Bağlı kaynaklar": "APIFootball.com; eski API-Football yolu devre dışı", "Sınır": "TheSportsDB kadro/oyuncu profili, oyuncu başına canlı maç istatistiği yerine geçmez."},
+        {"Veri türü": "Bahis oranları", "Bağlı kaynaklar": "Sportmonks canlı oran uç noktası (paket erişimine bağlı), APIFootball.com", "Sınır": "OpenFootAPI, ESPN, OpenLigaDB, football-data.org ücretsiz kapsamı ve TheSportsDB bu uygulamada oran kaynağı değil."},
+        {"Veri türü": "Haber", "Bağlı kaynaklar": "Google Haberler RSS", "Sınır": "Başlık eşleşmesi; haber doğrulama veya sosyal medya duygu analizi değil."},
+    ]
+    st.dataframe(coverage_rows, use_container_width=True, hide_index=True)
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
     st.write("- APIFootball.com ayrı bir sağlayıcıdır; APIFOOTBALL_API_KEY ile apiv2 endpointine bağlanır. Anahtar yoksa devre dışı kalır.")
