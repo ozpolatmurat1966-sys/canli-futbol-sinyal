@@ -169,6 +169,7 @@ SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
 THESPORTSDB_API_KEY = str(secret("THESPORTSDB_API_KEY", "123")).strip() or "123"
 APIFOOTBALL_API_KEY = str(secret("APIFOOTBALL_API_KEY", "")).strip()
+FOOTYSTATS_API_KEY = str(secret("FOOTYSTATS_API_KEY", "example")).strip() or "example"
 
 # Provider health is session-local; never display credentials.
 def set_provider_status(name, configured, ok=None, detail=None):
@@ -196,6 +197,7 @@ def provider_status_table():
         ("TheSportsDB", True),
         ("ESPN", True),
         ("OpenLigaDB", True),
+        ("FootyStats", bool(FOOTYSTATS_API_KEY)),
     ]:
         item = statuses.get(name, {})
         ok = item.get("ok")
@@ -246,6 +248,44 @@ def api_get(endpoint, params=None):
         return None, "İstek zaman aşımına uğradı.", None
     except (requests.RequestException, ValueError) as e:
         return None, f"Bağlantı hatası: {e}", None
+
+@st.cache_data(ttl=300, show_spinner=False)
+def footystats_get(endpoint, params=None):
+    """FootyStats API. Falls back to their documented example key for a safe connectivity/demo test."""
+    token = FOOTYSTATS_API_KEY or "example"
+    query = {"key": token}
+    query.update(params or {})
+    try:
+        response = requests.get(
+            f"https://api.football-data-api.com/{endpoint.lstrip('/')}",
+            params=query, headers={"Accept": "application/json"}, timeout=18
+        )
+        if response.status_code != 200:
+            message = f"FootyStats HTTP {response.status_code}: {response.text[:160]}"
+            set_provider_status("FootyStats", token != "example", False, message)
+            return None, message
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("success") is False:
+            message = str((payload or {}).get("message") or (payload or {}).get("error") or "Beklenmeyen API yanıtı")[:180]
+            set_provider_status("FootyStats", token != "example", False, message)
+            return None, message
+        data = payload.get("data")
+        count = len(data) if isinstance(data, list) else (1 if data else 0)
+        label = "demo anahtarı" if token == "example" else "hesap anahtarı"
+        set_provider_status("FootyStats", True, True, f"HTTP 200; {count} kayıt; {label}.")
+        return payload, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        message = f"FootyStats bağlantı/JSON hatası: {exc}"
+        set_provider_status("FootyStats", bool(token), False, message[:180])
+        return None, message
+
+@st.cache_data(ttl=300, show_spinner=False)
+def footystats_today_matches(date_text):
+    payload, err = footystats_get("todays-matches", {"date": date_text})
+    if err or not isinstance(payload, dict):
+        return [], err or "FootyStats fikstür yanıtı okunamadı"
+    items = payload.get("data") or []
+    return (items if isinstance(items, list) else []), None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def football_data_get(path, params=None):
@@ -2388,6 +2428,12 @@ with source_tab:
             _, of_test_err = openfootapi_live_matches()
             if of_test_err:
                 set_provider_status("OpenFootAPI", bool(str(secret("OPENFOOT_API_KEY", "")).strip()), False, of_test_err[:180])
+            # FootyStats documented test key works without an account; a user key can be stored in Secrets.
+            fs_rows, fs_err = footystats_today_matches(date.today().isoformat())
+            if fs_err:
+                set_provider_status("FootyStats", FOOTYSTATS_API_KEY != "example", False, fs_err[:180])
+            else:
+                set_provider_status("FootyStats", True, True, f"HTTP 200; bugün {len(fs_rows)} maç kaydı; " + ("demo anahtarı" if FOOTYSTATS_API_KEY == "example" else "hesap anahtarı"))
             # TheSportsDB free schedule endpoint; no secret required for public key 123.
             _, test_err = thesportsdb_matches_for_date(date.today().isoformat())
             if test_err and "bu tarihte futbol maçı döndürmedi" not in test_err:
@@ -2413,6 +2459,27 @@ with source_tab:
             except requests.RequestException as exc:
                 set_provider_status("OpenLigaDB", True, False, f"Bağlantı hatası: {exc}"[:180])
         st.success("Bağlantı testleri tamamlandı. Sonuçları aşağıdaki tabloda görebilirsin.")
+    if st.button("⚽ FootyStats ücretsiz API denemesini test et", key="test_footystats"):
+        with st.spinner("FootyStats test anahtarıyla bugünün maçları sorgulanıyor..."):
+            fs_rows, fs_err = footystats_today_matches(date.today().isoformat())
+            if fs_err:
+                st.error(fs_err)
+            else:
+                st.success(f"FootyStats API yanıt verdi. Bugün için {len(fs_rows)} kayıt döndü.")
+                if fs_rows:
+                    st.dataframe([{
+                        "Maç ID": x.get("id", "—"),
+                        "Ev sahibi": x.get("home_name") or x.get("homeID") or "—",
+                        "Deplasman": x.get("away_name") or x.get("awayID") or "—",
+                        "Durum": x.get("status", "—"),
+                        "Ev gol": x.get("homeGoalCount", "—"),
+                        "Dep gol": x.get("awayGoalCount", "—"),
+                        "Başlama zamanı": x.get("date_unix", "—"),
+                        "Lig sezon ID": x.get("competition_id", "—"),
+                    } for x in fs_rows[:50]], use_container_width=True, hide_index=True)
+                else:
+                    st.info("API bağlantısı çalıştı ancak seçilen gün için demo/hesap kapsamında maç dönmedi.")
+                st.caption("Not: 'example' anahtarı bağlantı/örnek veriyi test etmek içindir. Gerçek ücretsiz deneme hesabı anahtarını FOOTYSTATS_API_KEY olarak Secrets'a ekleyince gerçek kapsam test edilir.")
     provider_status_table()
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
