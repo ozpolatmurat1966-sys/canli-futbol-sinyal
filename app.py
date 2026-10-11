@@ -757,6 +757,37 @@ def find_other_source_matches(match):
         fixture_id = (candidate.get("fixture") or {}).get("id")
         if fixture_id in (None, ""):
             continue
+
+        # ESPN team-name equality alone is not enough: reject a different kickoff,
+        # a non-live ESPN event for a live source match, or conflicting live scores.
+        if source == "ESPN":
+            original_date = str((match.get("fixture") or {}).get("date") or "")
+            candidate_date = str((candidate.get("fixture") or {}).get("date") or "")
+            try:
+                from datetime import datetime
+                original_dt = datetime.fromisoformat(original_date.replace("Z", "+00:00"))
+                candidate_dt = datetime.fromisoformat(candidate_date.replace("Z", "+00:00"))
+                if original_dt.tzinfo is None or candidate_dt.tzinfo is None:
+                    continue
+                if abs((original_dt - candidate_dt).total_seconds()) > 6 * 60 * 60:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            original_status = str(((match.get("fixture") or {}).get("status") or {}).get("short") or "").upper()
+            candidate_status = str(((candidate.get("fixture") or {}).get("status") or {}).get("short") or "").upper()
+            original_live = original_status in ("LIVE", "1H", "2H", "HT", "ET", "P")
+            candidate_live = candidate_status in ("LIVE", "1H", "2H", "HT", "ET", "P")
+            if original_live and not candidate_live:
+                continue
+            if original_live and candidate_live:
+                original_goals = match.get("goals") or {}
+                candidate_goals = candidate.get("goals") or {}
+                oh, oa = original_goals.get("home"), original_goals.get("away")
+                ch, ca = candidate_goals.get("home"), candidate_goals.get("away")
+                if None not in (oh, oa, ch, ca) and (int(oh), int(oa)) != (int(ch), int(ca)):
+                    continue
+
         key = (source, str(fixture_id))
         if key in seen:
             continue
@@ -2625,7 +2656,7 @@ def show_matches(matches, prefix):
                                 f"{(alt_teams.get('away') or {}).get('name', 'Deplasman')} · "
                                 f"{alt_status.get('elapsed') or '—'}'"
                             )
-                            st.caption("Bu eşleşme takım adlarının tam normalize edilmiş karşılaştırmasına dayanır; maç kimliği ilgili sağlayıcıya aittir.")
+                            st.caption("Takım adları eşleştirildi; maç tarihi, canlı durumu ve skor tutarlılığı ayrıca kontrol edilir. Maç kimliği ilgili sağlayıcıya aittir.")
                             if st.button(f"{alt_source} verilerini aç", key=f"{prefix}_cross_open_{fid}_{alt_source}_{alt_fixture.get('id')}"):
                                 st.session_state[f"cross_source_selected_{fid}"] = alternative
                         selected_alternative = st.session_state.get(f"cross_source_selected_{fid}")
