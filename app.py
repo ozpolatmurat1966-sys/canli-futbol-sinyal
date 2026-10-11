@@ -36,13 +36,17 @@ MARKET_TR = {
     "Asian Handicap": "Asya Handikap", "Corners Over Under": "Korner Alt/Üst",
     "Exact Score": "Doğru Skor", "Double Chance": "Çifte Şans",
     "Draw No Bet": "Beraberlikte İade", "Odd/Even": "Tek / Çift Gol",
-    "Cards Over/Under": "Kart Alt/Üst", "Total": "Toplam",
+    "Cards Over/Under": "Kart Alt/Üst", "Total": "Toplam", "Asian Handicap (2nd Half)": "Asya Handikap (İkinci Yarı)",
+    "Asian Handicap (1st Half)": "Asya Handikap (İlk Yarı)", "Team Total": "Takım Gol Toplamı",
+    "Goals Over/Under (2nd Half)": "İkinci Yarı Gol Alt/Üst",
+    "Corners Over Under": "Korner Alt/Üst", "Player Shots": "Oyuncu Şutları",
 }
 OPTION_TR = {
     "Home": "Ev Sahibi (1)", "Draw": "Beraberlik (X)", "Away": "Deplasman (2)",
     "Yes": "Evet", "No": "Hayır", "Over": "Üst", "Under": "Alt",
     "Home/Draw": "1X", "Draw/Away": "X2", "Home/Away": "12",
-    "1st Half": "İlk Yarı", "2nd Half": "İkinci Yarı",
+    "1st Half": "İlk Yarı", "2nd Half": "İkinci Yarı", "Home +0": "Ev Sahibi +0", "Away +0": "Deplasman +0",
+    "Home -0.5": "Ev Sahibi -0,5", "Away -0.5": "Deplasman -0,5",
 }
 
 # Sağlayıcı pazar adlarını, ek açıklamalar (ör. "(2nd Half)") içerse bile Türkçeleştir.
@@ -114,11 +118,14 @@ def api_get(endpoint, params=None):
         r = requests.get(f"{BASE_URL}/{endpoint}",
                          headers={"x-apisports-key": API_KEY},
                          params=params or {}, timeout=20)
+        remaining = r.headers.get("x-ratelimit-requests-remaining")
+        limit = r.headers.get("x-ratelimit-requests-limit")
+        quota_note = f" (günlük kalan istek: {remaining}/{limit})" if remaining and limit else ""
         if r.status_code != 200:
-            return None, f"HTTP {r.status_code}", None
+            return None, f"HTTP {r.status_code}{quota_note}: {r.text[:300]}", None
         payload = r.json()
         if payload.get("errors"):
-            return None, f"API hatası: {payload['errors']}", payload
+            return None, f"API hatası{quota_note}: {payload['errors']}", payload
         return payload.get("response", []), None, payload
     except requests.Timeout:
         return None, "İstek zaman aşımına uğradı.", None
@@ -148,7 +155,8 @@ def show_stats(fixture_id, match):
         st.error(f"İstatistik isteği başarısız: {err}")
         return None
     if not data or len(data) < 2:
-        st.info("API bu maç için istatistik döndürmedi. Buton çalıştı; bu lig/maç için istatistik kapsam dışı olabilir veya maç istatistikleri henüz yayınlanmamış olabilir.")
+        st.warning("İstatistik isteği gönderildi ancak API kullanılabilir istatistik döndürmedi. Bu durum genellikle maç/lig kapsamı, maçın durumu veya henüz yayımlanmamış veriden kaynaklanır. Aynı maçın oranlarının gelmesi, istatistiklerin de mevcut olduğu anlamına gelmez.")
+        st.caption("Kontrol: API-Football panelindeki günlük istek hakkını ve ilgili ligin Coverage bölümünü kontrol edin. Uygulama eksik istatistiği tahmin ederek doldurmaz.")
         return None
 
     teams = match.get("teams", {})
@@ -177,7 +185,8 @@ def show_lineups(fixture_id):
         st.error(f"Kadro isteği başarısız: {err}")
         return
     if not data:
-        st.info("API bu maç için kadro döndürmedi. Kadrolar genellikle maçtan kısa süre önce açıklanır; ayrıca lig/maç kapsamı planınıza dahil olmayabilir.")
+        st.warning("Kadro isteği gönderildi ancak API kadro döndürmedi. Kadrolar çoğunlukla maçtan yaklaşık 20–40 dakika önce gelir; bazı liglerde bu veri hiç sunulmayabilir.")
+        st.caption("Bu durumda uygulama kadro uydurmaz. İlgili maçın lig kapsamı ve API günlük limitini kontrol edin.")
         return
     st.subheader("Kadro bilgileri")
     cols = st.columns(min(2, len(data)))
@@ -345,7 +354,7 @@ def show_matches(matches, prefix):
                     odds = show_odds(fid)
                 analyze_match(match, stats, odds)
 
-live_tab, date_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "ℹ️ Program hakkında"])
+live_tab, date_tab, tr_sources_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🇹🇷 Türkiye kaynakları", "ℹ️ Program hakkında"])
 with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
@@ -370,6 +379,13 @@ with date_tab:
     if "date_matches" in st.session_state:
         st.caption("Seçilen tarih: " + st.session_state.get("date_label", ""))
         show_matches(st.session_state["date_matches"], "date")
+with tr_sources_tab:
+    st.subheader("Türkiye oran ve haber kaynakları")
+    st.warning("Bu bölüm kaynaklara erişim sağlar; şu an Nesine/İddaa oranlarını otomatik içeri aktardığını veya sosyal medya yorumlarını taradığını iddia etmez. Bunun için izinli/veri sağlayan bir bağlantı kurulması gerekir.")
+    st.markdown("- [Nesine – İddaa ve canlı oranlar](https://www.nesine.com/)")
+    st.markdown("- [TFF – Resmî futbol haberleri ve duyurular](https://www.tff.org/)")
+    st.markdown("- [Google Haberler – Futbol haberleri](https://news.google.com/search?q= futbol)")
+    st.markdown("**Sonraki entegrasyon için:** Resmî/izinli oran akışı veya erişilebilir RSS haber akışı bağlandığında kaynak, tarih ve bağlantı bilgileriyle havuz oluşturulabilir. Sosyal medya yorumları ayrı bir bölümde, kaynak ve zaman damgasıyla tutulmalı; tek başına bahis sinyali sayılmamalıdır.")
 with info_tab:
     st.subheader("Program hakkında")
     st.markdown("""
