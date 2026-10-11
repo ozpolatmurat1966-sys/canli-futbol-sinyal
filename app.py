@@ -70,14 +70,23 @@ def translate_market(value):
     ]
     for en, tr in replacements:
         raw = raw.replace(en, tr)
-    raw = raw.replace("Corners", "Korner").replace("Cards", "Kart")
+    raw = raw.replace("Corners", "Korner").replace("Corner", "Korner").replace("Cards", "Kart")
     raw = raw.replace("Goals", "Goller").replace("Goal", "Gol")
     raw = raw.replace("Player", "Oyuncu").replace("Shots", "Şut")
+    raw = raw.replace("Away", "Deplasman").replace("Home", "Ev Sahibi")
+    raw = raw.replace("Over/Under", "Alt/Üst").replace("Over Under", "Alt/Üst")
     raw = raw.replace(" (2nd Half)", " (İkinci Yarı)").replace(" (1st Half)", " (İlk Yarı)")
     raw = raw.replace(" (Second Half)", " (İkinci Yarı)").replace(" (First Half)", " (İlk Yarı)")
+    raw = raw.replace("First Half", "İlk Yarı").replace("Second Half", "İkinci Yarı")
+    raw = raw.replace("15m", "15 dakika").replace("30m", "30 dakika").replace("45m", "45 dakika")
     raw = raw.replace("1x2 - İlk 15 Dakika", "Maç Sonucu - İlk 15 Dakika")
     raw = raw.replace("1x2 - İlk 30 Dakika", "Maç Sonucu - İlk 30 Dakika")
     raw = raw.replace("1x2 - İlk 60 Dakika", "Maç Sonucu - İlk 60 Dakika")
+    # Tidy common mixed-language provider labels
+    raw = raw.replace("Deplasman Korner Alt/Üst", "Deplasman Korner Alt/Üst")
+    raw = raw.replace("Ev Sahibi Korner Alt/Üst", "Ev Sahibi Korner Alt/Üst")
+    raw = raw.replace("Alt/Üst 15m-30m", "15–30. Dakika Alt/Üst")
+    raw = raw.replace("Alt/Üst 30m-45m", "30–45. Dakika Alt/Üst")
     return raw
 
 def translate_option(value):
@@ -89,6 +98,10 @@ def translate_option(value):
     raw = raw.replace("Draw", "Beraberlik").replace("Over", "Üst").replace("Under", "Alt")
     raw = raw.replace("Yes", "Evet").replace("No", "Hayır")
     raw = raw.replace("1st Half", "İlk Yarı").replace("2nd Half", "İkinci Yarı")
+    raw = raw.replace("Away", "Deplasman").replace("Home", "Ev Sahibi")
+    raw = raw.replace("Corners", "Korner").replace("Corner", "Korner")
+    raw = raw.replace("Cards", "Kart").replace("Offsides", "Ofsayt")
+    raw = raw.replace("15 minutes", "İlk 15 dakika").replace("30 minutes", "İlk 30 dakika")
     return raw
 
 def secret(name, default=""):
@@ -533,6 +546,40 @@ def analyze_match(match, stats, odds_rows):
             st.caption(f"Doğru skor pazarında {correct_score_count} oran kaydı ayrıca mevcut; bu oranlar ana pazar kısa listesine alınmadı.")
     else:
         st.info("Oran verisi olmadığı için karşılaştırma yapılamadı.")
+
+    # Show evidence for/against broad live-game tendencies; this is descriptive, not a probability model.
+    supporting = []
+    opposing = []
+    if stats and h_on is not None and a_on is not None:
+        total_on = h_on + a_on
+        if total_on >= 5:
+            supporting.append(f"Maçta toplam {int(total_on)} isabetli şut var; hücum etkinliği mevcut.")
+        elif total_on <= 2:
+            opposing.append(f"Toplam isabetli şut yalnızca {int(total_on)}; gol/üst beklentisini destekleyen veri zayıf.")
+        if abs(h_on - a_on) >= 3:
+            leader = stats["home_name"] if h_on > a_on else stats["away_name"]
+            supporting.append(f"{leader} isabetli şutta belirgin üstün ({max(h_on,a_on)}–{min(h_on,a_on)}).")
+    if stats and h_cor is not None and a_cor is not None:
+        total_corners = h_cor + a_cor
+        if total_corners >= 7:
+            supporting.append(f"Toplam korner {int(total_corners)}; korner pazarı için hareketlilik işareti.")
+        elif total_corners <= 2:
+            opposing.append(f"Toplam korner {int(total_corners)}; yüksek korner çizgilerini destekleyen veri yok.")
+    if stats and h_xg is not None and a_xg is not None:
+        total_xg = h_xg + a_xg
+        if total_xg >= 1.5:
+            supporting.append(f"Toplam xG {total_xg:.2f}; gol beklentisini destekleyebilir.")
+        elif total_xg < 0.7:
+            opposing.append(f"Toplam xG {total_xg:.2f}; gol beklentisi şu ana kadar düşük.")
+    if elapsed is not None and elapsed < 20:
+        opposing.append("Maç henüz erken dakikalarda; canlı istatistik örneklemi küçük olabilir.")
+    if supporting or opposing:
+        st.markdown("**Verilerin desteklediği ve zayıflattığı işaretler**")
+        if supporting:
+            st.write("**Destekleyen:** " + " ".join(supporting))
+        if opposing:
+            st.write("**Zayıflatan:** " + " ".join(opposing))
+        st.caption("Bunlar betimleyici göstergelerdir; olasılık modeli veya doğrulanmış bahis tavsiyesi değildir.")
 
     evidence = []
     if elapsed is not None:
