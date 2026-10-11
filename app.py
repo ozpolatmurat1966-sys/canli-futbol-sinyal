@@ -190,7 +190,7 @@ def sportmonks_live_matches():
             "https://api.sportmonks.com/v3/football/livescores",
             params={
                 "api_token": SPORTMONKS_API_TOKEN,
-                "include": "participants;statistics.type;lineups.player;periods;state;scores"
+                "include": "participants;statistics.type;lineups.player;periods;state;scores;league"
             },
             timeout=20,
         )
@@ -256,7 +256,7 @@ def sportmonks_to_api_football(matches):
             "goals": {"home": hg, "away": ag},
             "league": {"name": (m.get("league") or {}).get("name", "Sportmonks ligi"),
                        "country": (m.get("league") or {}).get("country", {}).get("name", "") if isinstance((m.get("league") or {}).get("country"), dict) else ""},
-            "_source": "Sportmonks"
+            "_source": "Sportmonks", "_sportmonks_raw": m
         })
     return normalized
 
@@ -279,6 +279,45 @@ def sportmonks_find_match(home_name, away_name):
         ):
             return match, None
     return None, "Sportmonks ücretsiz kapsamındaki canlı maçlar arasında bu karşılaşma bulunamadı."
+
+@st.cache_data(ttl=90, show_spinner=False)
+def sportmonks_fixture_detail(fixture_id):
+    """Fetch a fixture detail response; unlike livescores, fixture endpoints support full includes."""
+    if not SPORTMONKS_API_TOKEN:
+        return None, "Sportmonks token eklenmedi."
+    try:
+        response = requests.get(
+            f"https://api.sportmonks.com/v3/football/fixtures/{fixture_id}",
+            params={"api_token": SPORTMONKS_API_TOKEN,
+                    "include": "participants;scores;events;lineups.player;statistics.type;periods;state;league"},
+            timeout=18,
+        )
+        if response.status_code != 200:
+            return None, f"Sportmonks maç ayrıntısı HTTP {response.status_code}: {response.text[:220]}"
+        payload = response.json()
+        return payload.get("data"), None
+    except (requests.RequestException, ValueError) as exc:
+        return None, f"Sportmonks maç ayrıntısı bağlantı hatası: {exc}"
+
+@st.cache_data(ttl=60, show_spinner=False)
+def sportmonks_live_odds(fixture_id):
+    """Use the dedicated in-play odds endpoint, never the livescores include parameter."""
+    if not SPORTMONKS_API_TOKEN:
+        return None, "Sportmonks token eklenmedi."
+    try:
+        response = requests.get(
+            f"https://api.sportmonks.com/v3/football/odds/inplay/fixtures/{fixture_id}",
+            params={"api_token": SPORTMONKS_API_TOKEN, "include": "market;bookmaker"},
+            timeout=18,
+        )
+        if response.status_code in (401, 403, 402):
+            return None, "Sportmonks canlı oran erişimi hesabınızın paketinde açık değil. Ücretsiz plan canlı oranları kapsamıyor; gerçek oran olmadan bahis seçimi üretilemez."
+        if response.status_code != 200:
+            return None, f"Sportmonks canlı oranları HTTP {response.status_code}: {response.text[:220]}"
+        payload = response.json()
+        return payload.get("data", []), None
+    except (requests.RequestException, ValueError) as exc:
+        return None, f"Sportmonks canlı oran bağlantı hatası: {exc}"
 
 def num(value):
     if value is None:
@@ -317,96 +356,94 @@ def tr_status(status):
     return STATUS_TR.get(status or "", status or "Bilinmiyor")
 
 def show_stats(fixture_id, match):
-    data, err, _ = api_get("fixtures/statistics", {"fixture": fixture_id})
-    if not data or len(data) < 2:
-        teams = match.get("teams", {})
-        home_name = teams.get("home", {}).get("name", "")
-        away_name = teams.get("away", {}).get("name", "")
-        sm_match, sm_err = sportmonks_find_match(home_name, away_name) if SPORTMONKS_API_TOKEN else (None, "Sportmonks token eklenmedi.")
-        if sm_match:
-            sm_stats = sm_match.get("statistics") or []
-            # Convert Sportmonks statistic rows into the app's two-team display format.
-            by_team = {}
-            for item in sm_stats:
-                participant_id = item.get("participant_id")
-                participant = item.get("participant") or {}
-                team_name = participant.get("name") or str(participant_id or "Takım")
-                by_team.setdefault(team_name, []).append({
-                    "type": (item.get("type") or {}).get("name", "İstatistik"),
-                    "value": (item.get("data") or {}).get("value")
-                })
-            if len(by_team) >= 2:
-                names = list(by_team.keys())[:2]
-                data = [
-                    {"team": {"name": names[0]}, "statistics": by_team[names[0]]},
-                    {"team": {"name": names[1]}, "statistics": by_team[names[1]]},
-                ]
-                st.info("İstatistikler yedek kaynak Sportmonks üzerinden alındı.")
-            else:
-                st.warning("API-Football veri döndürmedi; Sportmonks da bu maç için iki takımın istatistiğini sunmadı.")
-                if sm_err: st.caption(sm_err)
-                return None
-        else:
-            if err:
-                st.error(f"API-Football isteği başarısız: {err}")
-            st.warning("İstatistik kaydı API-Football'da boş.")
-            if SPORTMONKS_API_TOKEN:
-                st.caption(sm_err or "Sportmonks bu maçı yedek kaynakta bulamadı. Ücretsiz plan yalnızca Danimarka Superliga ve İskoçya Premiership kapsamındadır.")
-            else:
-                st.caption("Yedek kaynak için Streamlit Secrets bölümüne SPORTMONKS_API_TOKEN eklenmelidir. Ücretsiz kapsam yalnızca seçili liglerle sınırlıdır.")
+    if match.get("_source") == "Sportmonks":
+        raw = match.get("_sportmonks_raw") or {}
+        if not raw.get("statistics"):
+            raw_detail, detail_err = sportmonks_fixture_detail(fixture_id)
+            if raw_detail:
+                raw = raw_detail
+        participants = raw.get("participants") or []
+        team_names = {}
+        for part in participants:
+            meta = part.get("meta") or {}
+            loc = str(meta.get("location", "")).lower()
+            team_names[part.get("id")] = part.get("name") or ("Ev sahibi" if loc == "home" else "Deplasman")
+        grouped = {}
+        for item in raw.get("statistics") or []:
+            pid = item.get("participant_id")
+            team_name = team_names.get(pid)
+            if not team_name:
+                team_name = (item.get("participant") or {}).get("name") or str(pid or "Takım")
+            dtype = item.get("type") or {}
+            value_obj = item.get("data") or {}
+            value = value_obj.get("value", item.get("value"))
+            grouped.setdefault(team_name, []).append({"type": dtype.get("name", "İstatistik"), "value": value})
+        if len(grouped) < 2:
+            st.warning("Sportmonks bu maç için iki takımın istatistiklerini henüz döndürmedi.")
             return None
-
-    teams = match.get("teams", {})
-    home_name = teams.get("home", {}).get("name", data[0].get("team", {}).get("name", "Ev sahibi"))
-    away_name = teams.get("away", {}).get("name", data[1].get("team", {}).get("name", "Deplasman"))
+        names = list(grouped.keys())
+        data = [{"team": {"name": name}, "statistics": grouped[name]} for name in names[:2]]
+        home_name = match.get("teams", {}).get("home", {}).get("name", names[0])
+        away_name = match.get("teams", {}).get("away", {}).get("name", names[1])
+        # Keep home/away order based on participant metadata, not API response order.
+        home_part = next((p.get("name") for p in participants if str((p.get("meta") or {}).get("location", "")).lower()=="home"), home_name)
+        away_part = next((p.get("name") for p in participants if str((p.get("meta") or {}).get("location", "")).lower()=="away"), away_name)
+        by_name = {d["team"]["name"]: d for d in data}
+        data = [by_name.get(home_part, data[0]), by_name.get(away_part, data[1])]
+        st.info("İstatistikler Sportmonks maç verisinden alındı.")
+    else:
+        data, err, _ = api_get("fixtures/statistics", {"fixture": fixture_id})
+        if not data or len(data) < 2:
+            if err: st.error(f"API-Football istatistik isteği: {err}")
+            st.warning("Bu maç için istatistik sağlayıcıdan gelmedi; veri uydurulmadı.")
+            return None
+        teams = match.get("teams", {})
+        home_name = teams.get("home", {}).get("name", data[0].get("team", {}).get("name", "Ev sahibi"))
+        away_name = teams.get("away", {}).get("name", data[1].get("team", {}).get("name", "Deplasman"))
     rows_for_table = []
     for team in data:
         for item in team.get("statistics", []):
-            rows_for_table.append({
-                "İstatistik": STAT_TR.get(item.get("type", ""), item.get("type", "Diğer")),
-                team.get("team", {}).get("name", "Takım"): item.get("value") if item.get("value") is not None else "—"
-            })
+            label = item.get("type", "Diğer")
+            rows_for_table.append({"İstatistik": STAT_TR.get(label, label), team.get("team", {}).get("name", "Takım"): item.get("value") if item.get("value") is not None else "—"})
     if rows_for_table:
         st.subheader("Maç istatistikleri")
         st.dataframe(rows_for_table, use_container_width=True, hide_index=True)
-
-    return {
-        "home_name": home_name, "away_name": away_name,
-        "home_rows": data[0].get("statistics", []),
-        "away_rows": data[1].get("statistics", []),
-    }
+    return {"home_name": home_name, "away_name": away_name,
+            "home_rows": data[0].get("statistics", []), "away_rows": data[1].get("statistics", [])}
 
 def show_lineups(fixture_id, match=None):
-    data, err, _ = api_get("fixtures/lineups", {"fixture": fixture_id})
-    if not data and match and SPORTMONKS_API_TOKEN:
-        teams = match.get("teams", {})
-        sm_match, sm_err = sportmonks_find_match(
-            teams.get("home", {}).get("name", ""),
-            teams.get("away", {}).get("name", "")
-        )
-        if sm_match:
-            sm_lineups = sm_match.get("lineups") or []
-            converted = []
-            for lineup in sm_lineups:
-                player = lineup.get("player") or {}
-                converted.append({
-                    "team": {"name": (lineup.get("team") or {}).get("name", "Takım")},
-                    "formation": lineup.get("formation_position"),
-                    "startXI": [{"player": {"name": player.get("display_name") or player.get("name") or "Oyuncu"}}]
-                              if lineup.get("type", {}).get("name", "").lower() in ("starting XI", "starter") else [],
-                    "substitutes": []
-                })
-            if converted:
-                data = converted
-                st.info("Kadro bilgisi yedek kaynak Sportmonks üzerinden alındı; oyuncu sınıflaması sağlayıcının sunduğu alanlarla sınırlı olabilir.")
-        elif sm_err:
-            st.caption(sm_err)
-    if err and not data:
-        st.error(f"Kadro isteği başarısız: {err}")
-    if not data:
-        st.warning("Kadro verisi API-Football'da bulunamadı; yedek kaynak da bu maç için kadro döndürmedi. Kadro verisi olmayan maçlarda oyuncu listesi uydurulmaz.")
-        st.caption("Kadrolar maçtan önce açıklanabilir; ayrıca Sportmonks ücretsiz kapsamı yalnızca seçili liglerle sınırlıdır.")
-        return
+    if match and match.get("_source") == "Sportmonks":
+        raw = match.get("_sportmonks_raw") or {}
+        if not raw.get("lineups"):
+            detail, err = sportmonks_fixture_detail(fixture_id)
+            if detail: raw = detail
+        participants = raw.get("participants") or []
+        names = {p.get("id"): p.get("name", "Takım") for p in participants}
+        grouped = {}
+        for entry in raw.get("lineups") or []:
+            pid = entry.get("participant_id") or entry.get("team_id")
+            team_name = names.get(pid) or (entry.get("team") or {}).get("name") or "Takım"
+            player = entry.get("player") or {}
+            pname = player.get("display_name") or player.get("name")
+            if not pname: continue
+            kind = str((entry.get("type") or {}).get("name", "")).lower()
+            slot = grouped.setdefault(team_name, {"team":{"name":team_name}, "formation":None, "startXI":[], "substitutes":[]})
+            player_obj = {"player":{"name":pname}}
+            if any(word in kind for word in ("substitute", "bench", "yedek")):
+                slot["substitutes"].append(player_obj)
+            else:
+                slot["startXI"].append(player_obj)
+        data = list(grouped.values())
+        if not data:
+            st.warning("Sportmonks bu maç için kadroyu henüz döndürmedi. Kadro açıklanmamış olabilir.")
+            return
+        st.info("Kadro verisi Sportmonks üzerinden alındı.")
+    else:
+        data, err, _ = api_get("fixtures/lineups", {"fixture": fixture_id})
+        if not data and err: st.error(f"Kadro isteği: {err}")
+        if not data:
+            st.warning("Kadro verisi bu maç için henüz mevcut değil.")
+            return
     st.subheader("Kadro bilgileri")
     cols = st.columns(min(2, len(data)))
     for i, team in enumerate(data):
@@ -418,13 +455,38 @@ def show_lineups(fixture_id, match=None):
             if starters: st.write("**İlk 11:** " + ", ".join(starters))
             if subs: st.write("**Yedekler:** " + ", ".join(subs))
 
-def show_odds(fixture_id):
+def show_odds(fixture_id, match=None):
+    if match and match.get("_source") == "Sportmonks":
+        data, err = sportmonks_live_odds(fixture_id)
+        if err:
+            st.warning(err)
+            return []
+        rows = []
+        for item in data or []:
+            odd = num(item.get("value", item.get("dp3")))
+            if odd is None or odd <= 1 or item.get("stopped") or item.get("suspended"):
+                continue
+            market = (item.get("market") or {}).get("name") or item.get("market_description") or "Pazar"
+            bookmaker = (item.get("bookmaker") or {}).get("name") or f"Sağlayıcı #{item.get('bookmaker_id', '—')}"
+            option = item.get("label") or item.get("name") or "Seçenek"
+            market_tr = translate_market(market)
+            option_tr = translate_option(option)
+            rows.append({"Pazar": market_tr, "Seçenek": option_tr, "Oran": odd,
+                         "Oranın ham olasılığı (%)": round(100/odd, 1),
+                         "_odd": odd, "_market": market_tr, "_option": option_tr, "_bookmaker": bookmaker})
+        if not rows:
+            st.info("Sportmonks canlı oran uç noktası yanıt verdi ancak bu maç için kullanılabilir oran yok. Ücretsiz hesapta canlı oran erişimi olmayabilir.")
+            return []
+        st.subheader("Sportmonks canlı oranları")
+        st.dataframe([{k:v for k,v in row.items() if not k.startswith('_')} for row in rows], use_container_width=True, hide_index=True)
+        show_odds_comparison(rows)
+        return rows
     data, err, _ = api_get("odds", {"fixture": fixture_id})
     if err:
         st.error(f'Oran isteği başarısız: {err}')
         return []
     if not data:
-        st.info("Bu maç için oran bulunamadı. Ücretsiz API her maçın ve pazarın oranını sağlamayabilir.")
+        st.info("Bu maç için API-Football oranı bulunamadı. Ücretsiz günlük kota ve pazar kapsamı sınırlı olabilir.")
         return []
     all_rows = []
     for item in data:
@@ -439,19 +501,14 @@ def show_odds(fixture_id):
                     implied = 100 / odd if odd and odd > 0 else None
                     raw_option = option.get("value", "—")
                     translated_option = translate_option(raw_option)
-                    row = {
-                        "Pazar": market_tr, "Seçenek": translated_option,
-                        "Oran": option.get("odd", "—"),
-                        "Oranın ham olasılığı (%)": round(implied, 1) if implied is not None else "—",
-                        "_odd": odd, "_market": market_tr, "_option": translated_option,
-                        "_bookmaker": bookmaker.get("name", "Bilinmiyor"),
-                    }
-                    rows.append(row)
-                    all_rows.append(row)
+                    row = {"Pazar": market_tr, "Seçenek": translated_option, "Oran": option.get("odd", "—"),
+                           "Oranın ham olasılığı (%)": round(implied, 1) if implied is not None else "—",
+                           "_odd": odd, "_market": market_tr, "_option": translated_option,
+                           "_bookmaker": bookmaker.get("name", "Bilinmiyor")}
+                    rows.append(row); all_rows.append(row)
                 if rows:
                     with st.expander(market_tr):
-                        st.dataframe([{k:v for k,v in row.items() if not k.startswith("_")} for row in rows],
-                                     use_container_width=True, hide_index=True)
+                        st.dataframe([{k:v for k,v in row.items() if not k.startswith("_")} for row in rows], use_container_width=True, hide_index=True)
     show_odds_comparison(all_rows)
     return all_rows
 
@@ -774,43 +831,69 @@ def analyze_match(match, stats, odds_rows):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_team_news(home_name, away_name):
-    """Public Google News RSS headlines only; not full articles or social-media comments."""
-    query = quote_plus(f'("{home_name}" OR "{away_name}") football')
+    """Fetch public RSS headlines for both teams; never claims to read all websites/social media."""
+    query = quote_plus(f'("{home_name}" OR "{away_name}") (football OR futbol OR injury OR lineup OR sakatlık OR kadro)')
     url = f"https://news.google.com/rss/search?q={query}&hl=tr&gl=TR&ceid=TR:tr"
     try:
-        response = requests.get(url, headers={"User-Agent": "FutbolAnalizMerkezi/1.0"}, timeout=12)
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 FutbolAnalizMerkezi/1.0"}, timeout=12)
         response.raise_for_status()
         root = ET.fromstring(response.content)
         items = []
-        for item in root.findall(".//item")[:10]:
-            title = item.findtext("title", default="Haber başlığı yok")
+        for item in root.findall(".//item")[:20]:
+            title = item.findtext("title", default="")
             link = item.findtext("link", default="")
             pub = item.findtext("pubDate", default="")
             source = item.findtext("source", default="Google Haberler")
             if title and link:
-                items.append({"Başlık": title, "Kaynak": source, "Yayın zamanı": pub, "Bağlantı": link})
+                items.append({"title": title, "source": source, "published": pub, "link": link})
         return items, None
     except Exception as exc:
-        return [], f"Haber akışına erişilemedi: {exc}"
+        return [], f"Haber akışı şu an alınamadı: {exc}"
+
+def summarize_news_headlines(items):
+    """Explain headline-only signals with transparent keyword rules; no full-article or social scraping."""
+    if not items:
+        return {"tone":"Veri yok", "summary":"Erişilebilir başlık bulunamadı; haber etkisi hesaplanamadı.", "count":0}
+    text_all = " ".join(i.get("title", "") for i in items).lower()
+    groups = {
+        "Olumsuz takım haberi": ["injury", "injured", "ruled out", "out for", "suspended", "sakat", "sakatlık", "cezalı", "oynamayacak", "ameliyat", "misses", "doubt", "şüpheli"],
+        "Olumlu takım haberi": ["returns", "return to", "back in training", "fit again", "geri döndü", "takımla çalıştı", "kadrodaki yerini aldı", "ready to play"],
+        "Kadro/teknik haber": ["lineup", "starting xi", "team news", "formation", "ilk 11", "kadrosu", "teknik direktör", "manager", "coach", "press conference", "basın toplantısı"],
+        "Olağandışı/inceleme haberi": ["investigation", "match-fixing", "fixing", "betting probe", "şike", "soruşturma", "disiplin soruşturması", "integrity"],
+    }
+    found = {label: sum(1 for key in keys if key in text_all) for label, keys in groups.items()}
+    active = [label for label, count in found.items() if count]
+    if "Olağandışı/inceleme haberi" in active:
+        tone = "İnceleme gerekli"
+    elif "Olumsuz takım haberi" in active and "Olumlu takım haberi" in active:
+        tone = "Karışık"
+    elif "Olumsuz takım haberi" in active:
+        tone = "Olumsuz haber işareti"
+    elif "Olumlu takım haberi" in active:
+        tone = "Olumlu haber işareti"
+    elif "Kadro/teknik haber" in active:
+        tone = "Kadro/teknik gündem"
+    else:
+        tone = "Belirgin sinyal yok"
+    summary = "; ".join(active) if active else "Başlıklarda belirlenen anahtar sözcüklerle net kadro/sakatlık sinyali bulunmadı."
+    return {"tone":tone, "summary":summary, "count":len(items), "counts":found}
 
 def show_match_news(home_name, away_name, fixture_id):
-    st.markdown("**📰 Maç haberleri**")
-    st.caption("Google Haberler'in herkese açık RSS başlıkları gösterilir. Bu bölüm sosyal medya yorumlarını taramaz; başlıklar tek başına bahis sinyali değildir.")
-    if st.button("Haber başlıklarını getir", key=f"news_{fixture_id}"):
-        with st.spinner("Haber başlıkları aranıyor..."):
-            items, err = fetch_team_news(home_name, away_name)
-        st.session_state[f"news_items_{fixture_id}"] = items
-        st.session_state[f"news_error_{fixture_id}"] = err
-    items = st.session_state.get(f"news_items_{fixture_id}")
-    err = st.session_state.get(f"news_error_{fixture_id}")
+    st.markdown("**📰 Haber ve gündem analizi**")
+    st.caption("Takım adlarıyla eşleşen herkese açık Google Haberler RSS başlıkları arka planda taranır; başlıklar sana liste olarak dökülmez, kısa sinyal özeti gösterilir. Bu, tüm interneti veya özel sosyal medya yorumlarını kapsamaz.")
+    with st.spinner("Maç haber başlıkları arka planda inceleniyor..."):
+        items, err = fetch_team_news(home_name, away_name)
     if err:
         st.warning(err)
-    if items:
-        for item in items:
-            st.markdown(f"- [{item['Başlık']}]({item['Bağlantı']})")
-            st.caption(f"Kaynak: {item['Kaynak']} · {item['Yayın zamanı']}")
-    elif items == [] and not err:
-        st.info("Bu aramada haber başlığı bulunamadı.")
+        return
+    summary = summarize_news_headlines(items)
+    c1, c2 = st.columns(2)
+    c1.metric("Eşleşen başlık", summary["count"])
+    c2.metric("Haber sinyali", summary["tone"])
+    st.write("**Algoritmik özet:** " + summary["summary"])
+    if summary.get("counts") and summary["counts"].get("Olağandışı/inceleme haberi"):
+        st.warning("Bazı başlıklarda soruşturma/şike anahtar sözcükleri var. Bu bir iddia veya kanıt değildir; kaynak doğrulaması gerekir.")
+    st.caption("Özet yalnızca RSS başlıklarına dayalı anahtar-sözcük sınıflandırmasıdır; tam haber metni ve sosyal medya duygu analizi değildir.")
 
 def show_bet_candidates(stats, odds_rows, elapsed=None):
     """Rank available odds using transparent descriptive signals; never fabricate calibrated probabilities."""
@@ -893,15 +976,14 @@ def show_matches(matches, prefix):
                 st.session_state[f"stats_{fid}"] = True
             if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
                 st.session_state[f"lineup_{fid}"] = True
-            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}", disabled=is_sportmonks):
+            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
                 st.session_state[f"odds_{fid}"] = True
             if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
-                if not is_sportmonks:
-                    st.session_state[f"odds_{fid}"] = True
+                st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
             if is_sportmonks:
-                st.caption("Bu maç Sportmonks kaynağından geldi. İstatistik/kadro ve kısa vadeli tahminler kullanılabilir; Sportmonks oran akışı bu sürümde bağlı olmadığı için oran tablosu boş kalabilir.")
+                st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
             if st.button("API yanıtını kontrol et", key=f"{prefix}_diag_{fid}"):
                 with st.spinner("İstatistik API yanıtı kontrol ediliyor..."):
                     diag_data, diag_err, diag_payload = api_get("fixtures/statistics", {"fixture": fid})
@@ -920,15 +1002,15 @@ def show_matches(matches, prefix):
             if st.session_state.get(f"lineup_{fid}"):
                 show_lineups(fid, match)
             if st.session_state.get(f"odds_{fid}"):
-                odds = show_odds(fid)
+                odds = show_odds(fid, match)
             if st.session_state.get(f"analyze_{fid}"):
                 if stats is None:
                     stats = show_stats(fid, match)
-                if not odds and not is_sportmonks:
-                    odds = show_odds(fid)
+                if not odds:
+                    odds = show_odds(fid, match)
                 analyze_match(match, stats, odds)
 
-live_tab, date_tab, tr_sources_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🇹🇷 Türkiye kaynakları", "ℹ️ Program hakkında"])
+live_tab, date_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "ℹ️ Program hakkında"])
 with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
@@ -955,6 +1037,22 @@ with live_tab:
                         err = f"API-Football kotası dolu. Sportmonks yedeği de kullanılamadı: {sm_err}"
                     else:
                         err = "API-Football kotası dolu; Sportmonks şu anda canlı maç döndürmedi. Ücretsiz kapsam sınırlıdır."
+            elif not err and API_KEY and SPORTMONKS_API_TOKEN:
+                # Merge additional Sportmonks live matches when API-Football is available.
+                sm_data, sm_err = sportmonks_live_matches()
+                if not sm_err and sm_data:
+                    extra = sportmonks_to_api_football(sm_data)
+                    def match_key(item):
+                        ts = item.get("teams", {})
+                        norm = lambda v: "".join(ch.lower() for ch in str(v or "") if ch.isalnum())
+                        return tuple(sorted((norm((ts.get("home") or {}).get("name")), norm((ts.get("away") or {}).get("name")))))
+                    seen = {match_key(m) for m in (data or [])}
+                    merged = list(data or [])
+                    for item in extra:
+                        if match_key(item) not in seen:
+                            merged.append(item); seen.add(match_key(item))
+                    data = merged
+                    source = "API-Football + Sportmonks (Sportmonks ücretsiz lig kapsamı sınırlı)"
                 else:
                     err = "API-Football kotası dolu ve SPORTMONKS_API_TOKEN tanımlı değil. Streamlit Secrets bölümündeki anahtar adını kontrol et."
         if err:
@@ -980,46 +1078,6 @@ with date_tab:
     if "date_matches" in st.session_state:
         st.caption("Seçilen tarih: " + st.session_state.get("date_label", ""))
         show_matches(st.session_state["date_matches"], "date")
-with tr_sources_tab:
-    st.subheader("Türkiye oran ve haber kaynakları")
-    st.warning("Bu bölüm kaynaklara erişim sağlar; şu an Nesine/İddaa oranlarını otomatik içeri aktardığını veya sosyal medya yorumlarını taradığını iddia etmez. Bunun için izinli/veri sağlayan bir bağlantı kurulması gerekir.")
-    st.markdown("- [Nesine – İddaa ve canlı oranlar](https://www.nesine.com/)")
-    st.markdown("- [TFF – Resmî futbol haberleri ve duyurular](https://www.tff.org/)")
-    st.markdown("- [Google Haberler – Futbol haberleri](https://news.google.com/search?q=futbol)")
-    st.info("Maç kartlarının içindeki ‘Haber başlıklarını getir’ düğmesi, takımlar için herkese açık Google Haberler RSS başlıklarını ve bağlantılarını getirir. X/Instagram/diğer sosyal medya yorumları otomatik taranmıyor; bu sürümde sosyal duygu analizi yok.")
-    st.markdown("**Sonraki entegrasyon için:** Resmî/izinli oran akışı veya erişilebilir RSS haber akışı bağlandığında kaynak, tarih ve bağlantı bilgileriyle havuz oluşturulabilir. Sosyal medya yorumları ayrı bir bölümde, kaynak ve zaman damgasıyla tutulmalı; tek başına bahis sinyali sayılmamalıdır.")
-    st.divider()
-    st.subheader("Yedek canlı veri kaynağı: Sportmonks")
-    st.write("Sportmonks canlı maç, olay, istatistik ve kadro alanlarını tek yanıtta sağlayabilir; oranlar ayrı bir uç noktadan alınmalıdır. Ancak ücretsiz planı yalnızca Danimarka Superliga ve İskoçya Premiership ile sınırlıdır; diğer ligler için ücretsiz yedek garanti edilmez.")
-    if not SPORTMONKS_API_TOKEN:
-        st.info("Sportmonks ücretsiz token'ını aldıktan sonra Streamlit Secrets bölümüne şu satırı ekle: SPORTMONKS_API_TOKEN = \"TOKENIN\"")
-    else:
-        st.success("Sportmonks token'ı tanımlı. İstatistik/kadro boşsa uygulama önce bu kaynağı da kontrol edecek.")
-    st.markdown("[Sportmonks ücretsiz plan ve token](https://www.sportmonks.com/football-api/free-plan/)")
-    st.divider()
-    st.subheader("Ek fikstür kaynağı: football-data.org")
-    st.write("football-data.org bazı liglerde fikstür, sonuç ve puan durumu için yedek olabilir. Ücretsiz katman ayrıntılı canlı istatistik, tüm kadrolar veya bahis oranları sağlamaz.")
-    if not FOOTBALL_DATA_TOKEN:
-        st.info("Bağlamak için football-data.org sitesinden ücretsiz token alıp Streamlit uygulama ayarları → Secrets bölümüne şu satırı ekle: FOOTBALL_DATA_TOKEN = \"TOKENIN\"")
-    else:
-        comp_code = st.selectbox("İkinci kaynak lig kodu", ["PL", "PD", "BL1", "SA", "FL1", "DED", "PPL", "BSA"], format_func=lambda x: {"PL":"İngiltere Premier League", "PD":"İspanya La Liga", "BL1":"Almanya Bundesliga", "SA":"İtalya Serie A", "FL1":"Fransa Ligue 1", "DED":"Hollanda Eredivisie", "PPL":"Portekiz Primeira Liga", "BSA":"Brezilya Serie A"}.get(x, x))
-        if st.button("İkinci kaynaktan fikstür/sonuç getir"):
-            with st.spinner("İkinci kaynak sorgulanıyor..."):
-                second_data, second_err = football_data_get(f"competitions/{comp_code}/matches", {"dateFrom": date.today().isoformat(), "dateTo": date.today().isoformat()})
-            if second_err:
-                st.error(second_err)
-            else:
-                matches2 = second_data.get("matches", []) if second_data else []
-                if matches2:
-                    st.dataframe([{
-                        "Tarih": m.get("utcDate", "") ,
-                        "Ev sahibi": m.get("homeTeam", {}).get("name", "—"),
-                        "Deplasman": m.get("awayTeam", {}).get("name", "—"),
-                        "Skor": f"{m.get('score', {}).get('fullTime', {}).get('home') if m.get('score', {}).get('fullTime', {}).get('home') is not None else '—'} - {m.get('score', {}).get('fullTime', {}).get('away') if m.get('score', {}).get('fullTime', {}).get('away') is not None else '—'}",
-                        "Durum": m.get("status", "—")
-                    } for m in matches2], use_container_width=True, hide_index=True)
-                else:
-                    st.info("İkinci kaynak bu lig/tarih için maç döndürmedi.")
 with info_tab:
     st.subheader("Program hakkında")
     st.markdown("""
@@ -1032,5 +1090,5 @@ with info_tab:
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
-- İstatistik/kadro için Sportmonks yedek bağlantısı isteğe bağlıdır; ücretsiz kapsam Danimarka Superliga ve İskoçya Premiership ile sınırlıdır. football-data.org yalnızca desteklediği yarışmaların fikstür/sonuç verilerine yardımcı olur. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
+- Sportmonks ücretsiz planı yalnızca Danimarka Superliga ve İskoçya Premiership kapsamındadır; API-Football ücretsiz paketi günlük 100 istekle sınırlıdır. Kaynaklar bu sınırları ortadan kaldırmaz. Sportmonks canlı oran uç noktası ücretsiz planda açık değildir. Haber özeti, herkese açık RSS başlıklarından otomatik anahtar-sözcük sınıflandırması yapar; tüm haber sitelerini veya sosyal medyayı kapsamaz. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
