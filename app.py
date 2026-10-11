@@ -1612,7 +1612,9 @@ with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
         with st.spinner("Canlı maçlar yükleniyor..."):
+            live_diagnostics = []
             data, err = five_dollar_live_matches() if FIVE_DOLLAR_FOOTBALL_API_KEY else (None, "5DollarFootballAPI anahtarı tanımlı değil; açık kaynaklar deneniyor.")
+            live_diagnostics.append({"Kaynak": "5DollarFootballAPI", "Alınan kayıt": len(data or []) if data is not None else "—", "Canlı filtresinden geçen": len(data or []) if data is not None else "—", "Not": err or ("HTTP 200" if data is not None else "Anahtar tanımlı değil")})
             source = "5DollarFootballAPI" if data is not None else "Ücretsiz/açık skor kaynakları"
             five_dollar_error = err
             five_dollar_returned = data is not None
