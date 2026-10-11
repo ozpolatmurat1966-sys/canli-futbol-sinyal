@@ -282,6 +282,43 @@ def footystats_get(endpoint, params=None):
         set_provider_status("FootyStats", bool(token), False, message[:180])
         return None, message
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def footystats_league_options():
+    """Return leagues/seasons enabled for the user's FootyStats account."""
+    payload, err = footystats_get("league-list", {"chosen_leagues_only": "true"})
+    if err or not isinstance(payload, dict):
+        return [], err or "FootyStats lig listesi okunamadı"
+    leagues = payload.get("data") or []
+    options = []
+    for league in leagues:
+        if not isinstance(league, dict):
+            continue
+        league_name = league.get("name") or league.get("league_name") or "Lig"
+        country = league.get("country") or ""
+        seasons = league.get("season") or []
+        if isinstance(seasons, dict):
+            seasons = [seasons]
+        for season in seasons if isinstance(seasons, list) else []:
+            if not isinstance(season, dict) or season.get("id") is None:
+                continue
+            year = season.get("year") or season.get("season") or "Sezon"
+            label = f"{league_name} {year}" + (f" — {country}" if country else "")
+            options.append({"label": label, "league_id": season.get("id"), "league_name": league_name, "season": year})
+    options.sort(key=lambda x: x["label"].lower())
+    return options, None
+
+@st.cache_data(ttl=300, show_spinner=False)
+def footystats_league_matches(league_id):
+    payload, err = footystats_get("league-matches", {"league_id": str(league_id)})
+    if err or not isinstance(payload, dict):
+        return [], err or "FootyStats lig maçları yanıtı okunamadı"
+    items = payload.get("data") or []
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return [], "FootyStats maç listesi beklenen biçimde değil"
+    return items, None
+
 @st.cache_data(ttl=300, show_spinner=False)
 def footystats_today_matches(date_text):
     # FootyStats defaults to UTC and only returns leagues selected in account settings.
@@ -2489,6 +2526,48 @@ with source_tab:
                 else:
                     st.info("API bağlantısı çalıştı ancak seçilen gün için demo/hesap kapsamında maç dönmedi.")
                 st.caption("Not: 'example' anahtarı bağlantı/örnek veriyi test etmek içindir. Gerçek ücretsiz deneme hesabı anahtarını FOOTYSTATS_API_KEY olarak Secrets'a ekleyince gerçek kapsam test edilir.")
+    st.divider()
+    st.subheader("FootyStats — lig ve sezon seç")
+    st.caption("Bu liste, FootyStats hesabında API erişimi için seçilmiş ligleri gösterir. Ücretsiz denemede kapsam yalnızca hesabın izin verdiği liglerle sınırlı olabilir.")
+    if st.button("FootyStats lig listesini yükle", key="load_footystats_leagues"):
+        with st.spinner("Hesabındaki kullanılabilir ligler alınıyor..."):
+            league_options, league_err = footystats_league_options()
+            st.session_state["footystats_league_options"] = league_options
+            st.session_state["footystats_league_error"] = league_err
+    if st.session_state.get("footystats_league_error"):
+        st.warning(st.session_state["footystats_league_error"])
+    league_options = st.session_state.get("footystats_league_options", [])
+    if league_options:
+        label_to_option = {x["label"]: x for x in league_options}
+        chosen_label = st.selectbox("Lig / sezon", list(label_to_option.keys()), key="footystats_selected_league")
+        chosen_option = label_to_option[chosen_label]
+        if st.button("Seçili lig maçlarını getir", key="load_footystats_league_matches"):
+            with st.spinner("Seçili lig için maçlar alınıyor..."):
+                fs_league_matches, fs_league_err = footystats_league_matches(chosen_option["league_id"])
+                st.session_state["footystats_selected_matches"] = fs_league_matches
+                st.session_state["footystats_selected_matches_error"] = fs_league_err
+                st.session_state["footystats_selected_matches_label"] = chosen_label
+        if st.session_state.get("footystats_selected_matches_error"):
+            st.warning(st.session_state["footystats_selected_matches_error"])
+        elif st.session_state.get("footystats_selected_matches_label") == chosen_label and "footystats_selected_matches" in st.session_state:
+            selected_matches = st.session_state.get("footystats_selected_matches", [])
+            st.caption(f"{chosen_label}: {len(selected_matches)} maç kaydı")
+            if selected_matches:
+                st.dataframe([{
+                    "Tarih": x.get("date_unix", x.get("date", "—")),
+                    "Ev sahibi": x.get("home_name", x.get("homeID", "—")),
+                    "Deplasman": x.get("away_name", x.get("awayID", "—")),
+                    "Durum": x.get("status", "—"),
+                    "Ev gol": x.get("homeGoalCount", "—"),
+                    "Dep gol": x.get("awayGoalCount", "—"),
+                    "Toplam gol": x.get("totalGoalCount", "—"),
+                    "Korner": x.get("totalCornerCount", "—"),
+                    "Lig ID": x.get("competition_id", chosen_option["league_id"]),
+                } for x in selected_matches[:100]], use_container_width=True, hide_index=True)
+            else:
+                st.info("Bu lig/sezon için API maç listesi boş döndü.")
+    elif "footystats_league_options" in st.session_state and not st.session_state.get("footystats_league_error"):
+        st.info("Hesabında seçilmiş lig bulunamadı. FootyStats API Settings sayfasında lig seçimini kontrol et; ücretsiz denemede bazı hesaplarda yalnızca Premier League açılır.")
     provider_status_table()
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
