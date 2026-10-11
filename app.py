@@ -102,6 +102,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
     st.stop()
 
 API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
+FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 st.title("⚽ Futbol Analiz Merkezi")
 st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
@@ -131,6 +132,24 @@ def api_get(endpoint, params=None):
         return None, "İstek zaman aşımına uğradı.", None
     except (requests.RequestException, ValueError) as e:
         return None, f"Bağlantı hatası: {e}", None
+
+@st.cache_data(ttl=300, show_spinner=False)
+def football_data_get(path, params=None):
+    """Optional second source: football-data.org. Its free tier is mainly fixtures/results/tables, not detailed live stats or odds."""
+    if not FOOTBALL_DATA_TOKEN:
+        return None, "İkinci kaynak bağlı değil. football-data.org token'ını Streamlit Secrets bölümüne FOOTBALL_DATA_TOKEN adıyla ekleyebilirsin."
+    try:
+        response = requests.get(
+            f"https://api.football-data.org/v4/{path.lstrip('/')}",
+            headers={"X-Auth-Token": FOOTBALL_DATA_TOKEN},
+            params=params or {}, timeout=20
+        )
+        if response.status_code != 200:
+            return None, f"İkinci kaynak HTTP {response.status_code}: {response.text[:250]}"
+        payload = response.json()
+        return payload, None
+    except (requests.RequestException, ValueError) as exc:
+        return None, f"İkinci kaynak bağlantı hatası: {exc}"
 
 def num(value):
     if value is None:
@@ -339,6 +358,17 @@ def show_matches(matches, prefix):
                 st.session_state[f"stats_{fid}"] = True
                 st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
+            if st.button("API yanıtını kontrol et", key=f"{prefix}_diag_{fid}"):
+                with st.spinner("İstatistik API yanıtı kontrol ediliyor..."):
+                    diag_data, diag_err, diag_payload = api_get("fixtures/statistics", {"fixture": fid})
+                if diag_err:
+                    st.error(diag_err)
+                else:
+                    st.write(f"İstatistik uç noktası yanıt verdi. Dönen takım kaydı: {len(diag_data or [])}.")
+                    if not diag_data:
+                        st.warning("API hata bildirmedi ancak bu maç için istatistik kaydı boş.")
+                    if diag_payload:
+                        st.json({"results": diag_payload.get("results"), "errors": diag_payload.get("errors"), "response_count": len(diag_data or [])})
             stats = None
             odds = []
             if st.session_state.get(f"stats_{fid}"):
@@ -386,6 +416,30 @@ with tr_sources_tab:
     st.markdown("- [TFF – Resmî futbol haberleri ve duyurular](https://www.tff.org/)")
     st.markdown("- [Google Haberler – Futbol haberleri](https://news.google.com/search?q= futbol)")
     st.markdown("**Sonraki entegrasyon için:** Resmî/izinli oran akışı veya erişilebilir RSS haber akışı bağlandığında kaynak, tarih ve bağlantı bilgileriyle havuz oluşturulabilir. Sosyal medya yorumları ayrı bir bölümde, kaynak ve zaman damgasıyla tutulmalı; tek başına bahis sinyali sayılmamalıdır.")
+    st.divider()
+    st.subheader("İkinci ücretsiz veri kaynağı: football-data.org")
+    st.write("Bu kaynak bazı liglerde fikstür, sonuç ve puan durumu için yedek olabilir. Ücretsiz katman ayrıntılı canlı istatistik, tüm kadrolar veya bahis oranları sağlamaz; bu nedenle mevcut API-Football'ın tam yerine geçmez.")
+    if not FOOTBALL_DATA_TOKEN:
+        st.info("Bağlamak için football-data.org sitesinden ücretsiz token alıp Streamlit uygulama ayarları → Secrets bölümüne şu satırı ekle: FOOTBALL_DATA_TOKEN = \"TOKENIN\"")
+    else:
+        comp_code = st.selectbox("İkinci kaynak lig kodu", ["PL", "PD", "BL1", "SA", "FL1", "DED", "PPL", "BSA"], format_func=lambda x: {"PL":"İngiltere Premier League", "PD":"İspanya La Liga", "BL1":"Almanya Bundesliga", "SA":"İtalya Serie A", "FL1":"Fransa Ligue 1", "DED":"Hollanda Eredivisie", "PPL":"Portekiz Primeira Liga", "BSA":"Brezilya Serie A"}.get(x, x))
+        if st.button("İkinci kaynaktan fikstür/sonuç getir"):
+            with st.spinner("İkinci kaynak sorgulanıyor..."):
+                second_data, second_err = football_data_get(f"competitions/{comp_code}/matches", {"dateFrom": date.today().isoformat(), "dateTo": date.today().isoformat()})
+            if second_err:
+                st.error(second_err)
+            else:
+                matches2 = second_data.get("matches", []) if second_data else []
+                if matches2:
+                    st.dataframe([{
+                        "Tarih": m.get("utcDate", "") ,
+                        "Ev sahibi": m.get("homeTeam", {}).get("name", "—"),
+                        "Deplasman": m.get("awayTeam", {}).get("name", "—"),
+                        "Skor": f"{m.get('score', {}).get('fullTime', {}).get('home') if m.get('score', {}).get('fullTime', {}).get('home') is not None else '—'} - {m.get('score', {}).get('fullTime', {}).get('away') if m.get('score', {}).get('fullTime', {}).get('away') is not None else '—'}",
+                        "Durum": m.get("status", "—")
+                    } for m in matches2], use_container_width=True, hide_index=True)
+                else:
+                    st.info("İkinci kaynak bu lig/tarih için maç döndürmedi.")
 with info_tab:
     st.subheader("Program hakkında")
     st.markdown("""
@@ -398,5 +452,5 @@ with info_tab:
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
-- API ücretsiz planı tüm lig, istatistik ve pazarları kapsamayabilir. API anahtarını kodun içine yazmayın; Secrets bölümünde saklayın.
+- İkinci kaynak football-data.org opsiyoneldir; ücretsiz token ile yalnızca desteklediği yarışmaların fikstür/sonuç verilerini yedekler. Ayrıntılı istatistik ve oranları ikame etmez. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
