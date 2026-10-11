@@ -648,7 +648,7 @@ def espn_matches_for_date(date_text):
         "tur.1", "tur.2", "eng.1", "eng.2", "eng.3", "eng.4", "eng.5",
         "esp.1", "esp.2", "ita.1", "ita.2", "ger.1", "ger.2",
         "fra.1", "fra.2", "por.1", "ned.1", "bel.1", "sco.1",
-        "usa.1", "mex.1", "arg.1", "bra.1", "aus.1", "jpn.1",
+        "usa.1", "mex.1", "arg.1", "bra.1", "par.1", "chi.1", "col.1", "per.1", "uru.1", "aus.1", "jpn.1",
         "ksa.1", "chn.1", "ind.1", "tha.1", "mys.1", "idn.1",
         "afc.champions", "uefa.champions", "uefa.europa", "uefa.europa.conf"
     ]
@@ -687,7 +687,7 @@ def merge_fixture_sources(primary, supplemental):
     return merged
 
 def find_other_source_matches(match):
-    """Find the same fixture in other configured live feeds; only return provider-backed IDs."""
+    """Find the same fixture in other configured live feeds and a date-scoped ESPN scoreboard."""
     teams = match.get("teams") or {}
     home = (teams.get("home") or {}).get("name") or ""
     away = (teams.get("away") or {}).get("name") or ""
@@ -695,22 +695,64 @@ def find_other_source_matches(match):
     if not all(wanted):
         return [], "Takım adları eşleştirme için eksik."
 
-    # Reuse the app's existing provider fallback chain and its short-lived caches.
+    def team_matches(left, right):
+        # Ignore common club prefixes/suffixes; only use conservative matches.
+        import difflib
+        a = normalize_team_key(left)
+        b = normalize_team_key(right)
+        if not a or not b:
+            return False
+        if a == b:
+            return True
+        generic = ("club", "fc", "cf", "sc", "sportclub", "deportivo", "atletico")
+        for word in generic:
+            if a.startswith(word) and len(a) - len(word) >= 4:
+                a = a[len(word):]
+            if b.startswith(word) and len(b) - len(word) >= 4:
+                b = b[len(word):]
+        if a == b or (min(len(a), len(b)) >= 5 and (a in b or b in a)):
+            return True
+        return difflib.SequenceMatcher(None, a, b).ratio() >= 0.88
+
+    def same_fixture(candidate):
+        candidate_teams = candidate.get("teams") or {}
+        ch = (candidate_teams.get("home") or {}).get("name") or ""
+        ca = (candidate_teams.get("away") or {}).get("name") or ""
+        # Team order can differ across providers; both names must independently match.
+        return (team_matches(home, ch) and team_matches(away, ca)) or (team_matches(home, ca) and team_matches(away, ch))
+
     candidates = merge_live_match_feeds([])
     original_source = match.get("_source") or match.get("source")
+    fixture = match.get("fixture") or {}
+    kickoff = str(fixture.get("date") or "")
+    date_text = ""
+    try:
+        from datetime import datetime
+        parsed = datetime.fromisoformat(kickoff.replace("Z", "+00:00"))
+        date_text = parsed.strftime("%Y%m%d")
+    except (ValueError, TypeError):
+        date_text = ""
+
+    # OpenFootAPI IDs often include the competition code. Probe ESPN's Paraguay scoreboard
+    # for the fixture date because the generic OpenFootAPI source label doesn't reveal league.
+    fixture_id_text = str(fixture.get("id") or "").lower()
+    league = match.get("league") or {}
+    league_meta = normalize_team_key(str(league.get("name") or "") + " " + str(league.get("country") or ""))
+    espn_leagues = []
+    if "par1" in fixture_id_text or "paraguay" in league_meta or "paraguay" in fixture_id_text:
+        espn_leagues.append("par.1")
+    # Add the ESPN event only if the scoreboard has a date-scoped candidate.
+    if date_text:
+        for league_code in espn_leagues:
+            espn_items, espn_error = espn_scoreboard_for_date(date_text, league_code)
+            if not espn_error:
+                candidates.extend(espn_items or [])
+
     found = []
     seen = set()
     for candidate in candidates or []:
         source = candidate.get("_source") or candidate.get("source")
-        if not source or source == original_source:
-            continue
-        candidate_teams = candidate.get("teams") or {}
-        names = {
-            normalize_team_key((candidate_teams.get("home") or {}).get("name")),
-            normalize_team_key((candidate_teams.get("away") or {}).get("name")),
-        }
-        # Require both teams to match (home/away order may differ); avoid fuzzy guesses.
-        if names != wanted:
+        if not source or source == original_source or not same_fixture(candidate):
             continue
         fixture_id = (candidate.get("fixture") or {}).get("id")
         if fixture_id in (None, ""):
