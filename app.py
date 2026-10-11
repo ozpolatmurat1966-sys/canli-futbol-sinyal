@@ -2726,7 +2726,7 @@ with analytics_tab:
                 st.caption(st.session_state["analytics_team_form_label"])
                 wins = draws = losses = gf = ga = 0
                 rows = []
-                team_norm = _norm_team_name(team_query if "team_query" in locals() else "")
+                team_norm = normalize_team_key(team_query if "team_query" in locals() else "")
                 for item in form:
                     is_home = team_norm in normalize_team_key(item["home"])
                     own, opp = (item["home_goals"], item["away_goals"]) if is_home else (item["away_goals"], item["home_goals"])
