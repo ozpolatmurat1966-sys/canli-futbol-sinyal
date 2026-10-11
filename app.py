@@ -1466,6 +1466,50 @@ with date_tab:
 with source_tab:
     st.subheader("Veri sağlayıcıları ve kota yönetimi")
     st.caption("API anahtarları gösterilmez. Durumlar uygulamanın son gözlemlediği yanıtları yansıtır; tüm liglerin kapsandığını garanti etmez.")
+    if st.button("🧪 Bağlantıları şimdi test et", key="test_all_providers"):
+        test_rows = []
+        with st.spinner("Her kaynağa birer hafif test isteği gönderiliyor..."):
+            # Primary API: one live endpoint request; this consumes provider quota.
+            if API_KEY:
+                _, test_err, _ = api_get("fixtures", {"live": "all"})
+                set_provider_status("API-Football", True, not bool(test_err), (test_err or "Canlı fikstür uç noktası yanıt verdi.")[:180])
+            else:
+                set_provider_status("API-Football", False, False, "API_FOOTBALL_KEY tanımlı değil.")
+            if SPORTMONKS_API_TOKEN:
+                _, test_err = sportmonks_live_matches()
+                set_provider_status("Sportmonks", True, not bool(test_err), (test_err or "Canlı skor uç noktası yanıt verdi.")[:180])
+            else:
+                set_provider_status("Sportmonks", False, False, "SPORTMONKS_API_TOKEN tanımlı değil.")
+            if FOOTBALL_DATA_TOKEN:
+                _, test_err = football_data_get("matches", {"dateFrom": date.today().isoformat(), "dateTo": date.today().isoformat()})
+                set_provider_status("football-data.org", True, not bool(test_err), (test_err or "Maç uç noktası yanıt verdi.")[:180])
+            else:
+                set_provider_status("football-data.org", False, False, "FOOTBALL_DATA_TOKEN tanımlı değil.")
+            if BSD_API_TOKEN:
+                _, test_err = bsd_live_matches()
+                if test_err:
+                    set_provider_status("Bzzoiro Sports Data", True, False, test_err[:180])
+            else:
+                set_provider_status("Bzzoiro Sports Data", False, None, "BSD_API_TOKEN yok; ücretsiz kayıt sonrası eklenebilir.")
+            # Public endpoints: test one ESPN competition and one OpenLigaDB competition.
+            _, test_err = espn_scoreboard_for_date(date.today().isoformat(), "eng.1")
+            if test_err:
+                set_provider_status("ESPN", True, False, test_err[:180])
+            else:
+                set_provider_status("ESPN", True, True, "Premier League skor panosu yanıt verdi.")
+            try:
+                test_response = requests.get("https://api.openligadb.de/getmatchdata/bl1/2026", timeout=10)
+                if test_response.status_code == 200:
+                    try:
+                        test_count = len(test_response.json())
+                    except ValueError:
+                        test_count = 0
+                    set_provider_status("OpenLigaDB", True, True, f"HTTP 200; {test_count} Bundesliga kayıt satırı.")
+                else:
+                    set_provider_status("OpenLigaDB", True, False, f"HTTP {test_response.status_code}")
+            except requests.RequestException as exc:
+                set_provider_status("OpenLigaDB", True, False, f"Bağlantı hatası: {exc}"[:180])
+        st.success("Bağlantı testleri tamamlandı. Sonuçları aşağıdaki tabloda görebilirsin.")
     provider_status_table()
     st.markdown("**Kota koruması ve kapsam**")
     st.write("- Tekrarlanan çağrılar Streamlit önbelleğinden karşılanır; canlı skor ve fikstür verileri farklı sürelerde önbelleğe alınır.")
