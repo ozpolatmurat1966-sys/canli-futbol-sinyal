@@ -1606,7 +1606,26 @@ with live_tab:
                         source = "Bzzoiro Sports Data"
                 if not data:
                     espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
-                    live_espn = [m for m in espn_data if m.get("fixture", {}).get("status", {}).get("short") in ("LIVE", "HT")]
+                    # ESPN can occasionally leave an old event marked as in progress.
+                    # Only show plausible live matches kicked off within the last five hours.
+                    now_utc = datetime.now(timezone.utc)
+                    live_espn = []
+                    for item in espn_data or []:
+                        fixture = item.get("fixture") or {}
+                        status_short = (fixture.get("status") or {}).get("short")
+                        if status_short not in ("LIVE", "HT"):
+                            continue
+                        try:
+                            kickoff = datetime.fromisoformat(str(fixture.get("date")).replace("Z", "+00:00"))
+                            if kickoff.tzinfo is None:
+                                kickoff = kickoff.replace(tzinfo=timezone.utc)
+                            age_hours = (now_utc - kickoff.astimezone(timezone.utc)).total_seconds() / 3600
+                            if age_hours < -0.25 or age_hours > 5:
+                                continue
+                        except (TypeError, ValueError):
+                            # Missing/invalid kickoff means we cannot safely call this match live.
+                            continue
+                        live_espn.append(item)
                     if live_espn:
                         data = live_espn
                         err = None
