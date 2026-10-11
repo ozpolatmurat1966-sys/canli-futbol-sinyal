@@ -180,6 +180,98 @@ def football_data_get(path, params=None):
         return None, f"İkinci kaynak bağlantı hatası: {exc}"
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def football_data_matches_for_date(date_text):
+    """Supplementary fixtures/results from football-data.org; coverage depends on token/plan."""
+    if not FOOTBALL_DATA_TOKEN:
+        return [], "football-data.org tokenı ekli değil"
+    payload, err = football_data_get("matches", {"dateFrom": date_text, "dateTo": date_text})
+    if err or not isinstance(payload, dict):
+        return [], err or "football-data.org yanıtı okunamadı"
+    out = []
+    for item in payload.get("matches", []):
+        home = (item.get("homeTeam") or {}).get("name")
+        away = (item.get("awayTeam") or {}).get("name")
+        if not home or not away:
+            continue
+        score = item.get("score") or {}
+        full = score.get("fullTime") or {}
+        competition = item.get("competition") or {}
+        status_raw = item.get("status") or "Scheduled"
+        status_map = {"FINISHED": "Maç Bitti", "IN_PLAY": "Canlı", "PAUSED": "Devre Arası", "SCHEDULED": "Başlamadı", "TIMED": "Başlamadı", "POSTPONED": "Ertelendi", "CANCELLED": "İptal"}
+        out.append({
+            "fixture": {"id": f"fd-{item.get('id')}", "date": item.get("utcDate"), "status": {"long": status_map.get(status_raw, status_raw), "short": status_raw, "elapsed": None}},
+            "teams": {"home": {"name": home}, "away": {"name": away}},
+            "goals": {"home": full.get("home"), "away": full.get("away")},
+            "league": {"name": competition.get("name", "football-data.org"), "country": ""},
+            "_source": "football-data.org", "_raw_supplemental": item
+        })
+    return out, None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def openligadb_matches_for_date(date_text):
+    """Free public OpenLigaDB supplement for German football only; not a global live-data source."""
+    from datetime import datetime as _dt
+    try:
+        chosen = _dt.strptime(date_text, "%Y-%m-%d").date()
+    except ValueError:
+        return [], "Geçersiz tarih"
+    season = chosen.year if chosen.month >= 7 else chosen.year - 1
+    out = []
+    # Bundesliga and 2. Bundesliga are separate competitions; requests are cached for an hour.
+    for shortcut, league_name in (("bl1", "Almanya Bundesliga"), ("bl2", "Almanya 2. Bundesliga")):
+        try:
+            response = requests.get(f"https://api.openligadb.de/getmatchdata/{shortcut}/{season}", timeout=12)
+            if response.status_code != 200:
+                continue
+            matches = response.json()
+        except (requests.RequestException, ValueError):
+            continue
+        for item in matches if isinstance(matches, list) else []:
+            match_date = (item.get("matchDateTimeUTC") or item.get("matchDateTime") or "")
+            if not match_date or not str(match_date).startswith(date_text):
+                continue
+            t1 = item.get("team1") or {}
+            t2 = item.get("team2") or {}
+            home, away = t1.get("teamName"), t2.get("teamName")
+            if not home or not away:
+                continue
+            results = item.get("matchResults") or []
+            goals_home = goals_away = None
+            if results:
+                final_result = next((r for r in reversed(results) if r.get("resultTypeID") == 1), results[-1])
+                goals_home = final_result.get("pointsTeam1")
+                goals_away = final_result.get("pointsTeam2")
+            finished = item.get("matchIsFinished") is True
+            out.append({
+                "fixture": {"id": f"oldb-{item.get('matchID')}", "date": match_date, "status": {"long": "Maç Bitti" if finished else "Başlamadı", "short": "FT" if finished else "NS", "elapsed": None}},
+                "teams": {"home": {"name": home}, "away": {"name": away}},
+                "goals": {"home": goals_home, "away": goals_away},
+                "league": {"name": league_name, "country": "Almanya"},
+                "_source": "OpenLigaDB", "_raw_supplemental": item
+            })
+    return out, None
+
+def merge_fixture_sources(primary, supplemental):
+    """Merge fixtures by normalized team names so one match is not shown twice."""
+    def norm(text):
+        return "".join(ch.lower() for ch in str(text or "") if ch.isalnum())
+    merged = list(primary or [])
+    seen = set()
+    for item in merged:
+        teams = item.get("teams") or {}
+        names = sorted([norm((teams.get("home") or {}).get("name")), norm((teams.get("away") or {}).get("name"))])
+        if all(names):
+            seen.add(tuple(names))
+    for item in supplemental or []:
+        teams = item.get("teams") or {}
+        names = sorted([norm((teams.get("home") or {}).get("name")), norm((teams.get("away") or {}).get("name"))])
+        key = tuple(names)
+        if all(names) and key not in seen:
+            merged.append(item)
+            seen.add(key)
+    return merged
+
 @st.cache_data(ttl=45, show_spinner=False)
 def sportmonks_live_matches():
     """Optional Sportmonks fallback. Free coverage is limited to selected leagues."""
@@ -1069,14 +1161,25 @@ with date_tab:
     st.subheader("Tarihe göre fikstür")
     chosen = st.date_input("Maç tarihi", value=date.today())
     if st.button("Fikstürü getir"):
-        with st.spinner("Fikstür yükleniyor..."):
-            data, err, _ = api_get("fixtures", {"date": chosen.isoformat()})
-        if err: st.error(err)
-        else:
-            st.session_state["date_matches"] = data
+        with st.spinner("Fikstür kaynakları birleştiriliyor..."):
+            primary, api_err, _ = api_get("fixtures", {"date": chosen.isoformat()}) if API_KEY else (None, "API-Football anahtarı tanımlı değil", None)
+            primary = primary or []
+            fd_matches, fd_err = football_data_matches_for_date(chosen.isoformat())
+            oldb_matches, oldb_err = openligadb_matches_for_date(chosen.isoformat())
+            combined = merge_fixture_sources(primary, (fd_matches or []) + (oldb_matches or []))
+            st.session_state["date_matches"] = combined
             st.session_state["date_label"] = chosen.isoformat()
+            st.session_state["date_sources"] = {
+                "API-Football": len(primary), "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or [])
+            }
+            st.session_state["date_errors"] = [x for x in (api_err, fd_err, oldb_err) if x]
     if "date_matches" in st.session_state:
         st.caption("Seçilen tarih: " + st.session_state.get("date_label", ""))
+        counts = st.session_state.get("date_sources", {})
+        st.caption("Kaynak katkıları: " + " · ".join(f"{name}: {count}" for name, count in counts.items()))
+        errs = st.session_state.get("date_errors", [])
+        if errs:
+            st.caption("Bazı ek kaynaklar kullanılamadı; sonuçlar mevcut kaynaklarla gösteriliyor.")
         show_matches(st.session_state["date_matches"], "date")
 with info_tab:
     st.subheader("Program hakkında")
@@ -1090,5 +1193,6 @@ with info_tab:
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
-- Sportmonks ücretsiz planı yalnızca Danimarka Superliga ve İskoçya Premiership kapsamındadır; API-Football ücretsiz paketi günlük 100 istekle sınırlıdır. Kaynaklar bu sınırları ortadan kaldırmaz. Sportmonks canlı oran uç noktası ücretsiz planda açık değildir. Haber özeti, herkese açık RSS başlıklarından otomatik anahtar-sözcük sınıflandırması yapar; tüm haber sitelerini veya sosyal medyayı kapsamaz. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
+- Ek fikstür kaynakları: football-data.org (token ve plan kapsamına bağlı) ve OpenLigaDB (Almanya Bundesliga / 2. Bundesliga). Bu kaynaklar tarih fikstürünü genişletir; küresel canlı istatistik veya bahis oranı sağlamaz.
+- Sportmonks ücretsiz planı sınırlı lig kapsamındadır; API-Football ücretsiz paketi günlük 100 istekle sınırlıdır. Kaynakları birleştirmek bu limitleri kaldırmaz. Sportmonks canlı oran erişimi ücretsiz planda açık olmayabilir. Haber özeti, herkese açık RSS başlıklarını anahtar-sözcüklerle sınıflandırır; tüm interneti veya sosyal medyayı kapsamaz. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
