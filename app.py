@@ -1669,6 +1669,21 @@ with live_tab:
                     set_provider_status("Sportmonks", True, True, "Canlı sorgu: 0 kayıt döndü.")
                 else:
                     set_provider_status("Sportmonks", True, False, str(sm_err)[:180])
+            if not data and FOOTBALL_DATA_TOKEN:
+                # Check today's fixtures for live statuses within the competitions covered by this plan.
+                fd_today, fd_err = football_data_matches_for_date(date.today().isoformat())
+                fd_live = [
+                    item for item in (fd_today or [])
+                    if str(((item.get("fixture") or {}).get("status") or {}).get("short") or "").upper()
+                    in ("IN_PLAY", "PAUSED", "LIVE", "HT")
+                ]
+                if fd_live:
+                    data = fd_live
+                    err = None
+                    source = "football-data.org canlı maçları (kapsam plana bağlı)"
+                    set_provider_status("football-data.org", True, True, f"Bugün {len(fd_today or [])} maç; canlı/devre arası: {len(fd_live)}.")
+                elif not fd_err:
+                    set_provider_status("football-data.org", True, True, f"Bugün {len(fd_today or [])} maç; canlı/devre arası: 0.")
             if not data:
                 if BSD_API_TOKEN:
                     bsd_data, bsd_err = bsd_live_matches()
