@@ -1605,7 +1605,33 @@ with live_tab:
                         err = None
                         source = "Bzzoiro Sports Data"
                 if not data:
-                    espn_data, espn_err = espn_matches_for_date(date.today().isoformat())
+                    today_text = date.today().isoformat()
+                    # Check TheSportsDB today-events as another public fallback before ESPN.
+                    tsdb_live, tsdb_err = thesportsdb_matches_for_date(today_text)
+                    live_tsdb = []
+                    now_utc = datetime.now(timezone.utc)
+                    for item in tsdb_live or []:
+                        fixture = item.get("fixture") or {}
+                        status_short = (fixture.get("status") or {}).get("short")
+                        if status_short not in ("LIVE", "HT"):
+                            continue
+                        try:
+                            kickoff = datetime.fromisoformat(str(fixture.get("date")).replace("Z", "+00:00"))
+                            if kickoff.tzinfo is None:
+                                kickoff = kickoff.replace(tzinfo=timezone.utc)
+                            age_hours = (now_utc - kickoff.astimezone(timezone.utc)).total_seconds() / 3600
+                            if age_hours < -0.25 or age_hours > 5:
+                                continue
+                        except (TypeError, ValueError):
+                            continue
+                        item["_source"] = "TheSportsDB"
+                        live_tsdb.append(item)
+                    if live_tsdb:
+                        data = live_tsdb
+                        err = None
+                        source = "TheSportsDB açık maç listesi (kapsam sınırlı; oran yok)"
+                    if not data:
+                        espn_data, espn_err = espn_matches_for_date(today_text)
                     # ESPN can occasionally leave an old event marked as in progress.
                     # Only show plausible live matches kicked off within the last five hours.
                     now_utc = datetime.now(timezone.utc)
