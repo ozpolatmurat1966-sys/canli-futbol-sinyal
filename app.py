@@ -1760,8 +1760,14 @@ with live_tab:
                         live_espn = []
                         for item in espn_data or []:
                             fixture = item.get("fixture") or {}
-                            status_short = (fixture.get("status") or {}).get("short")
+                            status_obj = fixture.get("status") or {}
+                            status_short = str(status_obj.get("short") or "").upper()
+                            # Only accept explicit active states; stale ESPN event statuses
+                            # are not enough if the event has a final/full-time marker.
+                            status_long = str(status_obj.get("long") or "").strip().lower()
                             if status_short not in ("LIVE", "HT"):
+                                continue
+                            if any(term in status_long for term in ("final", "full time", "match finished", "after penalties", "after extra time")):
                                 continue
                             try:
                                 kickoff = datetime.fromisoformat(str(fixture.get("date")).replace("Z", "+00:00"))
@@ -1771,7 +1777,12 @@ with live_tab:
                                 if age_hours < -0.25 or age_hours > 5:
                                     continue
                             except (TypeError, ValueError):
-                                # Missing/invalid kickoff means we cannot safely call this match live.
+                                continue
+                            # ESPN status/clock is stale in some feeds; don't label a
+                            # match as live if its own clock is at/after 90 minutes and
+                            # it has no active clock update.
+                            elapsed = status_obj.get("elapsed")
+                            if status_short == "LIVE" and elapsed is not None and int(elapsed) >= 90:
                                 continue
                             live_espn.append(item)
                         espn_status_counts = {}
@@ -1797,7 +1808,7 @@ with live_tab:
                             data = live_espn
                             err = None
                             source = "ESPN açık skor panoları (lig kapsamı sınırlı; oran yok)"
-                            st.session_state["live_notice"] = "Ana kaynaklar yanıt vermedi; seçili liglerin canlı skorları ESPN üzerinden gösteriliyor."
+                            st.session_state["live_notice"] = "ESPN'de canlı olarak işaretlenen maçlar gösteriliyor; durum ve dakika sağlayıcıya bağlıdır."
                         elif not espn_err:
                             data = []
                             err = None
