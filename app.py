@@ -1216,4 +1216,64 @@ with info_tab:
 - Ek fikstür kaynakları: football-data.org (token ve plan kapsamına bağlı) ve OpenLigaDB (Almanya Bundesliga / 2. Bundesliga). Bu kaynaklar tarih fikstürünü genişletir; küresel canlı istatistik veya bahis oranı sağlamaz.
 - Sportmonks ücretsiz planı sınırlı lig kapsamındadır; API-Football ücretsiz paketi günlük 100 istekle sınırlıdır. Kaynakları birleştirmek bu limitleri kaldırmaz. Sportmonks canlı oran erişimi ücretsiz planda açık olmayabilir. Haber özeti, herkese açık RSS başlıklarını anahtar-sözcüklerle sınıflandırır; tüm interneti veya sosyal medyayı kapsamaz. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
-    
+
+# --- 10 kaynak için birleşik kaynak merkezi (yetkili veri erişimi esaslı) ---
+st.divider()
+st.header("🌐 Türkiye + Dünya Futbol Kaynak Merkezi")
+st.caption("Nesine, Misli, Bilyoner, Oley, Tuttur, Maçkolik, Sahadan, Flashscore, Sofascore ve FotMob bağlantılarını tek yerde toplar. Bir web bağlantısının bulunması, sitenin canlı verisinin otomatik çekildiği anlamına gelmez.")
+
+SOURCE_CATALOG = [
+    {"Kaynak": "Nesine", "Tür": "Türkiye bahis/oran", "url": "https://www.nesine.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Misli", "Tür": "Türkiye bahis/oran", "url": "https://www.misli.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Bilyoner", "Tür": "Türkiye bahis/oran", "url": "https://www.bilyoner.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Oley", "Tür": "Türkiye bahis/oran", "url": "https://www.oley.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Tuttur", "Tür": "Türkiye bahis/oran", "url": "https://www.tuttur.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Maçkolik", "Tür": "Skor/istatistik/oran", "url": "https://www.mackolik.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Sahadan", "Tür": "Skor/istatistik", "url": "https://www.sahadan.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Flashscore", "Tür": "Canlı skor/istatistik", "url": "https://www.flashscore.com/", "access": "Resmî otomatik veri erişimi ayrıca doğrulanmalı"},
+    {"Kaynak": "Sofascore", "Tür": "Canlı skor/istatistik", "url": "https://www.sofascore.com/", "access": "Genel kullanıma açık resmî API varsayılmamalı"},
+    {"Kaynak": "FotMob", "Tür": "Canlı skor/istatistik", "url": "https://www.fotmob.com/", "access": "Otomatik erişim yöntemi ve izin durumu doğrulanmalı"},
+]
+
+with st.expander("10 kaynağın bağlantı ve erişim durumu", expanded=True):
+    for _src in SOURCE_CATALOG:
+        _c1, _c2, _c3 = st.columns([1.15, 1.45, 3.4])
+        _c1.markdown(f"**[{_src['Kaynak']}]({_src['url']})**")
+        _c2.write(_src["Tür"])
+        _c3.caption(_src["access"])
+
+st.subheader("Oranları tek tabloda birleştirmek için veri içe aktar")
+st.write("Kaynaklardan izinli olarak dışa aktardığın oranları aşağıdaki sütunlarla CSV biçiminde yapıştırabilirsin. Bu alan, site verisini kendiliğinden çekmez; girilen kayıtları normalize edip aynı tabloda gösterir.")
+st.code("kaynak,mac,market,secim,oran,zaman\\nNesine,Galatasaray - Fenerbahçe,1X2,1,2.10,2026-10-11 20:00", language="csv")
+_odds_text = st.text_area("CSV oran verisi", key="source_hub_odds_csv", height=130, placeholder="kaynak,mac,market,secim,oran,zaman\nNesine,Ev Sahibi - Deplasman,1X2,1,2.10,2026-10-11 20:00")
+if st.button("Oran tablosunu oluştur", key="source_hub_parse_odds"):
+    import pandas as _pd
+    from io import StringIO as _StringIO
+    try:
+        _df = _pd.read_csv(_StringIO(_odds_text.strip()))
+        _required = {"kaynak", "mac", "market", "secim", "oran"}
+        _missing = _required - {str(c).strip().lower() for c in _df.columns}
+        if _missing:
+            st.error("Eksik sütunlar: " + ", ".join(sorted(_missing)) + ". Gerekli sütunlar: kaynak, mac, market, secim, oran.")
+        else:
+            _df.columns = [str(c).strip().lower() for c in _df.columns]
+            _df["oran"] = _pd.to_numeric(_df["oran"].astype(str).str.replace(",", ".", regex=False), errors="coerce")
+            _df = _df.dropna(subset=["oran"])
+            _df = _df[_df["oran"] > 1.0]
+            if _df.empty:
+                st.warning("Geçerli oran kaydı bulunamadı. Oranlar 1.00'dan büyük sayısal değer olmalı.")
+            else:
+                st.session_state["source_hub_odds_table"] = _df
+                st.success(f"{len(_df)} geçerli oran kaydı tabloya alındı.")
+    except Exception as _e:
+        st.error(f"CSV okunamadı: {_e}")
+
+if "source_hub_odds_table" in st.session_state:
+    _odds_df = st.session_state["source_hub_odds_table"]
+    st.dataframe(_odds_df, use_container_width=True, hide_index=True)
+    if {"mac", "market", "secim", "oran"}.issubset(set(_odds_df.columns)):
+        st.caption("Aynı maç/market/seçim için en yüksek girilmiş oran:")
+        _best_df = _odds_df.sort_values("oran", ascending=False).drop_duplicates(["mac", "market", "secim"])
+        st.dataframe(_best_df, use_container_width=True, hide_index=True)
+
+st.info("Bu merkez ilk entegrasyon katmanıdır. 10 sitenin tamamından otomatik canlı veri alındığı iddiasında bulunmaz. Otomatik bağlantılar ancak resmî API, izinli veri akışı veya doğrulanmış erişim sağlandığında etkinleştirilmelidir. Mevcut Sportmonks, API-Football, football-data.org ve OpenLigaDB bağlantıları uygulamanın önceki bölümlerinde ayrı çalışır.")
