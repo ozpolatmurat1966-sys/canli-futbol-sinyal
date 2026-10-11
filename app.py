@@ -4,7 +4,8 @@ import requests
 from datetime import date
 import math
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
 
@@ -1025,6 +1026,25 @@ def apifootball_com_live_matches():
         return None, message
 
 @st.cache_data(ttl=45, show_spinner=False)
+def is_fresh_live_fixture(match, max_age_hours=4):
+    """Reject stale live labels when kickoff is too old or implausibly in the future."""
+    fixture = match.get("fixture") or {}
+    raw_date = fixture.get("date")
+    if not raw_date:
+        return False
+    try:
+        value = str(raw_date).strip().replace("Z", "+00:00")
+        kickoff = datetime.fromisoformat(value)
+        if kickoff.tzinfo is None:
+            kickoff = kickoff.replace(tzinfo=timezone.utc)
+        kickoff = kickoff.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    now = datetime.now(timezone.utc)
+    age = (now - kickoff).total_seconds()
+    return -3 * 3600 <= age <= max_age_hours * 3600
+
+
 def openfootapi_live_matches():
     """OpenFootAPI live fixtures. Uses a private Streamlit secret when configured, public demo key otherwise."""
     token = str(st.secrets.get("OPENFOOT_API_KEY", "") or "").strip()
@@ -1085,9 +1105,15 @@ def openfootapi_live_matches():
                 "league": {"id": item.get("competitionId"), "name": competition_name or "OpenFootAPI", "country": ""},
                 "_source": "OpenFootAPI", "source": "OpenFootAPI", "_raw_openfootapi": item
             })
+        received_count = len(normalized)
+        normalized = [match for match in normalized if is_fresh_live_fixture(match)]
+        dropped_count = received_count - len(normalized)
         meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
         plan = ((meta.get("access") or {}).get("plan") if isinstance(meta, dict) else None) or "bilinmiyor"
-        set_provider_status("OpenFootAPI", True, True, f"HTTP 200; {len(items)} kayıt, {len(normalized)} canlı kayıt; plan: {plan}.")
+        status_note = f"HTTP 200; {len(items)} kayıt, {len(normalized)} güncel canlı kayıt; plan: {plan}."
+        if dropped_count:
+            status_note += f" Eski/saati doğrulanamayan {dropped_count} kayıt elendi."
+        set_provider_status("OpenFootAPI", True, True, status_note)
         return normalized, None
     except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
         message = f"OpenFootAPI bağlantı/yanıt hatası: {exc}"
@@ -1972,13 +1998,32 @@ def fetch_team_news(home_name, away_name):
         response.raise_for_status()
         root = ET.fromstring(response.content)
         items = []
-        for item in root.findall(".//item")[:20]:
-            title = item.findtext("title", default="")
+        team_keys = [normalize_team_key(name) for name in (home_name, away_name) if normalize_team_key(name)]
+        now = datetime.now(timezone.utc)
+        for item in root.findall(".//item"):
+            title = item.findtext("title", default="").strip()
             link = item.findtext("link", default="")
             pub = item.findtext("pubDate", default="")
             source = item.findtext("source", default="Google Haberler")
-            if title and link:
-                items.append({"title": title, "source": source, "published": pub, "link": link})
+            if not title or not link:
+                continue
+            # Search queries can return loosely related stories. Require a team name
+            # in the actual headline and a parseable, recent publication date.
+            title_key = normalize_team_key(title)
+            if not any(key in title_key for key in team_keys):
+                continue
+            try:
+                published_at = parsedate_to_datetime(pub)
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                age_seconds = (now - published_at.astimezone(timezone.utc)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if age_seconds < -24 * 3600 or age_seconds > 14 * 24 * 3600:
+                continue
+            items.append({"title": title, "source": source, "published": pub, "link": link})
+            if len(items) >= 20:
+                break
         return items, None
     except Exception as exc:
         return [], f"Haber akışı şu an alınamadı: {exc}"
@@ -2013,7 +2058,7 @@ def summarize_news_headlines(items):
 
 def show_match_news(home_name, away_name, fixture_id):
     st.markdown("**📰 Haber ve gündem analizi**")
-    st.caption("Takım adlarıyla eşleşen herkese açık Google Haberler RSS başlıkları arka planda taranır; başlıklar sana liste olarak dökülmez, kısa sinyal özeti gösterilir. Bu, tüm interneti veya özel sosyal medya yorumlarını kapsamaz.")
+    st.caption("Google Haberler RSS sonuçlarında yalnızca başlığında takım adı geçen ve son 14 günde yayımlanmış kayıtlar sayılır. Başlıklar kısa sinyal özeti için kullanılır; bu tarama tüm interneti veya özel sosyal medya yorumlarını kapsamaz.")
     with st.spinner("Maç haber başlıkları arka planda inceleniyor..."):
         items, err = fetch_team_news(home_name, away_name)
     if err:
