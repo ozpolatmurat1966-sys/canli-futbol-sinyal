@@ -2131,6 +2131,8 @@ def show_matches(matches, prefix):
                     st.session_state[f"analyze_{fid}"] = True
                 if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
                     st.session_state[f"players_{fid}"] = True
+            if is_openfootapi:
+                st.caption("OpenFootAPI bu maçta yalnızca canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran işlemleri bu kaynakta desteklenmiyor.")
             elif is_sportmonks:
                 st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
             elif is_thesportsdb:
