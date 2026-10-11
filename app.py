@@ -162,7 +162,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
             st.error("Şifre yanlış.")
     st.stop()
 
-API_KEY = ""
+API_KEY = ""  # Eski API sağlayıcısı devre dışı; dış istek yapılmaz.
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
@@ -183,7 +183,7 @@ def provider_status_table():
     statuses = st.session_state.get("provider_statuses", {})
     rows = []
     for name, configured in [
-        ("Eski API", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
         ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("TheSportsDB", True), ("ESPN", True), ("OpenLigaDB", True)
     ]:
         item = statuses.get(name, {})
@@ -205,10 +205,8 @@ st.title("⚽ Futbol Analiz Merkezi")
 st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
 
-if False and not API_KEY and not SPORTMONKS_API_TOKEN:
-    st.error("Canlı veri için en az bir sağlayıcı anahtarı gerekli. API_FOOTBALL_KEY veya SPORTMONKS_API_TOKEN ekleyin.")
-    st.code('API_FOOTBALL_KEY = "API_ANAHTARINIZ"\nSPORTMONKS_API_TOKEN = "SPORTMONKS_TOKENINIZ"\nAPP_PASSWORD = "KENDI_SIFRENIZ"')
-    st.stop()
+if not SPORTMONKS_API_TOKEN:
+    st.info("Sportmonks anahtarı tanımlı değil. ESPN, OpenLigaDB ve TheSportsDB gibi ücretsiz/açık kaynaklar denenir; canlı maç ve lig kapsamı sınırlı olabilir.")
 
 @st.cache_data(ttl=60, show_spinner=False)
 def api_get(endpoint, params=None):
