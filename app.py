@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 from datetime import date
 import math
+import xml.etree.ElementTree as ET
+from urllib.parse import quote_plus
 
 st.set_page_config(page_title="Futbol Analiz Merkezi", page_icon="⚽", layout="wide")
 
@@ -547,6 +549,8 @@ def analyze_match(match, stats, odds_rows):
     else:
         st.info("Oran verisi olmadığı için karşılaştırma yapılamadı.")
 
+    show_bet_candidates(stats, odds_rows, elapsed)
+
     # Show evidence for/against broad live-game tendencies; this is descriptive, not a probability model.
     supporting = []
     opposing = []
@@ -597,6 +601,98 @@ def analyze_match(match, stats, odds_rows):
     else:
         st.warning("**Karar: Şimdilik PAS GEÇ / ek doğrulama bekle.** İstatistik ve oranlar karşılaştırıldı; ancak açılış oranı geçmişi ve geçmiş maçlarda test edilmiş olasılık modeli olmadığı için bu sürüm doğrulanmış 'oyna' sinyali vermez.")
 
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_team_news(home_name, away_name):
+    """Public Google News RSS headlines only; not full articles or social-media comments."""
+    query = quote_plus(f'("{home_name}" OR "{away_name}") football')
+    url = f"https://news.google.com/rss/search?q={query}&hl=tr&gl=TR&ceid=TR:tr"
+    try:
+        response = requests.get(url, headers={"User-Agent": "FutbolAnalizMerkezi/1.0"}, timeout=12)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+        items = []
+        for item in root.findall(".//item")[:10]:
+            title = item.findtext("title", default="Haber başlığı yok")
+            link = item.findtext("link", default="")
+            pub = item.findtext("pubDate", default="")
+            source = item.findtext("source", default="Google Haberler")
+            if title and link:
+                items.append({"Başlık": title, "Kaynak": source, "Yayın zamanı": pub, "Bağlantı": link})
+        return items, None
+    except Exception as exc:
+        return [], f"Haber akışına erişilemedi: {exc}"
+
+def show_match_news(home_name, away_name, fixture_id):
+    st.markdown("**📰 Maç haberleri**")
+    st.caption("Google Haberler'in herkese açık RSS başlıkları gösterilir. Bu bölüm sosyal medya yorumlarını taramaz; başlıklar tek başına bahis sinyali değildir.")
+    if st.button("Haber başlıklarını getir", key=f"news_{fixture_id}"):
+        with st.spinner("Haber başlıkları aranıyor..."):
+            items, err = fetch_team_news(home_name, away_name)
+        st.session_state[f"news_items_{fixture_id}"] = items
+        st.session_state[f"news_error_{fixture_id}"] = err
+    items = st.session_state.get(f"news_items_{fixture_id}")
+    err = st.session_state.get(f"news_error_{fixture_id}")
+    if err:
+        st.warning(err)
+    if items:
+        for item in items:
+            st.markdown(f"- [{item['Başlık']}]({item['Bağlantı']})")
+            st.caption(f"Kaynak: {item['Kaynak']} · {item['Yayın zamanı']}")
+    elif items == [] and not err:
+        st.info("Bu aramada haber başlığı bulunamadı.")
+
+def show_bet_candidates(stats, odds_rows, elapsed=None):
+    """Rank available odds using transparent descriptive signals; never fabricate calibrated probabilities."""
+    st.markdown("### 🎯 Bahis adayları — veri sinyali")
+    st.caption("Bu bölüm kesin bahis tavsiyesi değildir. Kazanma olasılığı modeliyle doğrulanmamıştır; yalnızca mevcut maç istatistiğiyle uyumlu olabilecek pazarları ve en iyi görünen oranı listeler.")
+    if not odds_rows:
+        st.info("Oran verisi yok; seçenek ve oran önerisi üretilemez. PAS GEÇ.")
+        return
+    hr = stats.get("home_rows", []) if stats else []
+    ar = stats.get("away_rows", []) if stats else []
+    h_on, a_on = stat_value(hr, ["Shots on Goal"]), stat_value(ar, ["Shots on Goal"])
+    h_sh, a_sh = stat_value(hr, ["Total Shots"]), stat_value(ar, ["Total Shots"])
+    h_cor, a_cor = stat_value(hr, ["Corner Kicks"]), stat_value(ar, ["Corner Kicks"])
+    h_xg, a_xg = stat_value(hr, ["Expected Goals", "expected_goals"]), stat_value(ar, ["Expected Goals", "expected_goals"])
+    candidates = {}
+    for row in odds_rows:
+        odd = row.get("_odd")
+        if not odd or odd <= 1:
+            continue
+        market = str(row.get("_market", ""))
+        option = str(row.get("_option", ""))
+        low = (market + " " + option).lower()
+        family, reason, against = None, None, None
+        if ("korner" in low or "corner" in low) and h_cor is not None and a_cor is not None:
+            total = h_cor + a_cor
+            if total >= 7 and ("üst" in low or "over" in low):
+                family, reason, against = "Korner", f"Şu ana kadar toplam {int(total)} korner", "Kalan süre ve mevcut çizgi mutlaka kontrol edilmeli"
+            elif total <= 2 and ("alt" in low or "under" in low):
+                family, reason, against = "Korner", f"Şu ana kadar yalnızca {int(total)} korner", "Korner temposu sonradan artabilir"
+        elif ("gol alt/üst" in low or "toplam gol" in low or "goals over" in low) and h_on is not None and a_on is not None:
+            total_on = h_on + a_on
+            if total_on >= 5 and ("üst" in low or "over" in low):
+                family, reason, against = "Gol alt/üst", f"Toplam {int(total_on)} isabetli şut", "İsabetli şut gol garantisi değildir; skor ve çizgiye bakılmalı"
+            elif total_on <= 2 and ("alt" in low or "under" in low):
+                family, reason, against = "Gol alt/üst", f"Toplam isabetli şut {int(total_on)}", "Erken dakika veya düşük örneklem yanıltabilir"
+        elif ("karşılıklı gol" in low or "both teams score" in low) and h_on is not None and a_on is not None:
+            if h_on >= 2 and a_on >= 2 and ("evet" in low or "yes" in low):
+                family, reason, against = "Karşılıklı gol", f"İki takımın da en az 2 isabetli şutu var ({int(h_on)}–{int(a_on)})", "Şutlar gol anlamına gelmez; skor ve kalan süre önemli"
+        if family:
+            key = (market, option)
+            if key not in candidates or odd > candidates[key]["odd"]:
+                candidates[key] = {"Pazar": market, "Seçenek": option, "En iyi oran": odd, "Sağlayıcı": row.get("_bookmaker", "—"), "Veri sinyali": reason, "Dikkat": against, "odd": odd}
+    if not stats:
+        st.warning("Maç istatistiği yok. Oranlar görülebilir ama istatistikle desteklenen aday listesi üretmek doğru olmaz: PAS GEÇ.")
+    elif not candidates:
+        st.info("Mevcut istatistiklerle uyumlu ve yeterince açık bir aday bulunamadı. Maç sonucu/uzun oranlı seçenekleri rastgele önermiyorum: PAS GEÇ.")
+    else:
+        rows = sorted(candidates.values(), key=lambda x: x["odd"], reverse=True)[:8]
+        st.dataframe([{k:v for k,v in row.items() if k != "odd"} for row in rows], use_container_width=True, hide_index=True)
+        st.warning("Bunlar sadece izlemeye değer adaylardır; modelle doğrulanmış ‘oyna’ sinyali değildir. Bankroll/zarar sınırı belirlemeden işlem yapma.")
+
+
 def show_matches(matches, prefix):
     if not matches:
         st.info("Bu seçim için maç bulunamadı.")
@@ -620,6 +716,7 @@ def show_matches(matches, prefix):
             st.write(f"**Lig/ülke:** {league.get('name','—')} / {league.get('country','—')}")
             st.write(f"**Başlama:** {fixture.get('date','Bilinmiyor')}")
             st.write(f"**Durum:** {tr_status(status.get('long', status.get('short')))}")
+            show_match_news(home, away, fid)
             c1, c2, c3, c4 = st.columns(4)
             if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
@@ -687,7 +784,8 @@ with tr_sources_tab:
     st.warning("Bu bölüm kaynaklara erişim sağlar; şu an Nesine/İddaa oranlarını otomatik içeri aktardığını veya sosyal medya yorumlarını taradığını iddia etmez. Bunun için izinli/veri sağlayan bir bağlantı kurulması gerekir.")
     st.markdown("- [Nesine – İddaa ve canlı oranlar](https://www.nesine.com/)")
     st.markdown("- [TFF – Resmî futbol haberleri ve duyurular](https://www.tff.org/)")
-    st.markdown("- [Google Haberler – Futbol haberleri](https://news.google.com/search?q= futbol)")
+    st.markdown("- [Google Haberler – Futbol haberleri](https://news.google.com/search?q=futbol)")
+    st.info("Maç kartlarının içindeki ‘Haber başlıklarını getir’ düğmesi, takımlar için herkese açık Google Haberler RSS başlıklarını ve bağlantılarını getirir. X/Instagram/diğer sosyal medya yorumları otomatik taranmıyor; bu sürümde sosyal duygu analizi yok.")
     st.markdown("**Sonraki entegrasyon için:** Resmî/izinli oran akışı veya erişilebilir RSS haber akışı bağlandığında kaynak, tarih ve bağlantı bilgileriyle havuz oluşturulabilir. Sosyal medya yorumları ayrı bir bölümde, kaynak ve zaman damgasıyla tutulmalı; tek başına bahis sinyali sayılmamalıdır.")
     st.divider()
     st.subheader("Yedek canlı veri kaynağı: Sportmonks")
