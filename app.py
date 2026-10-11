@@ -2110,23 +2110,27 @@ def show_matches(matches, prefix):
             is_sportmonks = match.get("_source") == "Sportmonks"
             is_thesportsdb = match.get("_source") == "TheSportsDB"
             is_openfootapi = match.get("_source") == "OpenFootAPI"
-            # Do not clear action state during every rerun: doing so cancels the click
-            # before the requested result can render. Keep buttons clickable for all
-            # sources; each detail function performs its own source-capability check.
-            if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
-                st.session_state[f"stats_{fid}"] = True
-            if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
-                st.session_state[f"lineup_{fid}"] = True
-            if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
-                st.session_state[f"odds_{fid}"] = True
-            if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
-                st.session_state[f"stats_{fid}"] = True
-                st.session_state[f"odds_{fid}"] = True
-                st.session_state[f"analyze_{fid}"] = True
-            if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
-                st.session_state[f"players_{fid}"] = True
             if is_openfootapi:
-                st.caption("OpenFootAPI bu maçta yalnızca desteklediği canlı skor/fikstür alanlarını sağlar. İstatistik, oyuncu istatistiği, kadro ve oran uç noktaları olmadığı için bu işlemler devre dışıdır.")
+                # This source only provides fixtures/live scores. Clear any old action
+                # flags so stale state cannot call unsupported detail handlers again.
+                for state_key in (f"stats_{fid}", f"lineup_{fid}", f"odds_{fid}", f"analyze_{fid}", f"players_{fid}"):
+                    st.session_state.pop(state_key, None)
+            else:
+                # Keep supported-source actions clickable and preserve their state
+                # across Streamlit reruns so the result can render after the click.
+                c1, c2, c3, c4, c5 = st.columns(5)
+                if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
+                    st.session_state[f"stats_{fid}"] = True
+                if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
+                    st.session_state[f"lineup_{fid}"] = True
+                if c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
+                    st.session_state[f"odds_{fid}"] = True
+                if c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
+                    st.session_state[f"stats_{fid}"] = True
+                    st.session_state[f"odds_{fid}"] = True
+                    st.session_state[f"analyze_{fid}"] = True
+                if c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
+                    st.session_state[f"players_{fid}"] = True
             elif is_sportmonks:
                 st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
             elif is_thesportsdb:
