@@ -346,6 +346,29 @@ def thesportsdb_matches_for_date(date_text):
         set_provider_status("TheSportsDB", True, False, message[:180])
         return [], message
 
+@st.cache_data(ttl=900, show_spinner=False)
+def thesportsdb_event_detail(event_id, endpoint):
+    """Fetch a selected TheSportsDB event's available stats, lineup, or timeline."""
+    allowed = {"lookupeventstats.php", "lookuplineup.php", "lookuptimeline.php"}
+    if endpoint not in allowed or not str(event_id).isdigit():
+        return None, "Geçersiz TheSportsDB maç kimliği veya uç noktası."
+    try:
+        response = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/{THESPORTSDB_API_KEY}/{endpoint}",
+            params={"id": str(event_id)}, timeout=12
+        )
+        if response.status_code != 200:
+            message = f"TheSportsDB HTTP {response.status_code}"
+            set_provider_status("TheSportsDB", True, False, message)
+            return None, message
+        payload = response.json()
+        set_provider_status("TheSportsDB", True, True, "Maç detay uç noktası yanıt verdi.")
+        return payload, None
+    except (requests.RequestException, ValueError) as exc:
+        message = f"TheSportsDB bağlantı hatası: {exc}"
+        set_provider_status("TheSportsDB", True, False, message[:180])
+        return None, message
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def openligadb_matches_for_date(date_text):
     """Free public OpenLigaDB supplement for German football only; not a global live-data source."""
@@ -1391,6 +1414,7 @@ def show_matches(matches, prefix):
             show_match_news(home, away, fid)
             c1, c2, c3, c4 = st.columns(4)
             is_sportmonks = match.get("_source") == "Sportmonks"
+            is_thesportsdb = match.get("_source") == "TheSportsDB"
             if c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
             if c2.button("Kadroyu getir", key=f"{prefix}_lineup_{fid}"):
@@ -1403,6 +1427,39 @@ def show_matches(matches, prefix):
                 st.session_state[f"analyze_{fid}"] = True
             if is_sportmonks:
                 st.caption("Sportmonks maçı: istatistik/kadro maç kimliğiyle doğrudan istenir. Canlı oranlar ayrı uç noktadan denenir; ücretsiz hesapta canlı oran erişimi kapalı olabilir.")
+            elif is_thesportsdb:
+                tsdb_event_id = str(fid).replace("tsdb-", "", 1)
+                st.caption("TheSportsDB fikstürü: aşağıdaki ek düğmeler bu sağlayıcının sunduğu maç istatistiklerini, kadroyu ve olay akışını sorgular. Ücretsiz uç noktalarda veri alanları/limitleri sınırlı olabilir.")
+                d1, d2, d3 = st.columns(3)
+                if d1.button("TheSportsDB istatistikleri", key=f"{prefix}_tsdb_stats_{fid}"):
+                    with st.spinner("Maç istatistikleri alınıyor..."):
+                        payload, err = thesportsdb_event_detail(tsdb_event_id, "lookupeventstats.php")
+                    if err:
+                        st.warning(err)
+                    elif payload and any(payload.values()):
+                        st.json(payload)
+                    else:
+                        st.info("Bu maç için TheSportsDB istatistik kaydı yok.")
+                if d2.button("TheSportsDB kadrosu", key=f"{prefix}_tsdb_lineup_{fid}"):
+                    with st.spinner("Kadro bilgisi alınıyor..."):
+                        payload, err = thesportsdb_event_detail(tsdb_event_id, "lookuplineup.php")
+                    if err:
+                        st.warning(err)
+                    elif payload and any(payload.values()):
+                        st.json(payload)
+                    else:
+                        st.info("Bu maç için TheSportsDB kadro kaydı yok.")
+                if d3.button("TheSportsDB olay akışı", key=f"{prefix}_tsdb_timeline_{fid}"):
+                    with st.spinner("Maç olayları alınıyor..."):
+                        payload, err = thesportsdb_event_detail(tsdb_event_id, "lookuptimeline.php")
+                    if err:
+                        st.warning(err)
+                    elif payload and any(payload.values()):
+                        st.json(payload)
+                    else:
+                        st.info("Bu maç için TheSportsDB olay akışı yok.")
+            elif match.get("_source") not in (None, "API-Football", "Sportmonks"):
+                st.caption(f"Bu maçın fikstür kaynağı: {match.get('_source')}. Bu kaynağın maç ID'si API-Football ID'si olmadığı için API-Football istatistik/oran uç noktalarıyla sorgulanmaz. Gelişmiş istatistik için API-Football/Sportmonks kaynağındaki eşleşmiş maçı kullan.")
             if st.button("API yanıtını kontrol et", key=f"{prefix}_diag_{fid}"):
                 with st.spinner("İstatistik API yanıtı kontrol ediliyor..."):
                     diag_data, diag_err, diag_payload = api_get("fixtures/statistics", {"fixture": fid})
