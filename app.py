@@ -71,7 +71,9 @@ if not API_KEY:
     st.code('API_FOOTBALL_KEY = "API_ANAHTARINIZ"\nAPP_PASSWORD = "KENDI_SIFRENIZ"')
     st.stop()
 
+@st.cache_data(ttl=60, show_spinner=False)
 def api_get(endpoint, params=None):
+    """Cache API responses briefly so Streamlit reruns do not waste free calls."""
     try:
         r = requests.get(f"{BASE_URL}/{endpoint}",
                          headers={"x-apisports-key": API_KEY},
@@ -110,7 +112,7 @@ def show_stats(fixture_id, match):
         st.error(f"İstatistik isteği başarısız: {err}")
         return None
     if not data or len(data) < 2:
-        st.info("Bu maç için istatistik yok. Maçın durumu, lig kapsamı veya ücretsiz API sınırı etkili olabilir.")
+        st.info("API bu maç için istatistik döndürmedi. Buton çalıştı; bu lig/maç için istatistik kapsam dışı olabilir veya maç istatistikleri henüz yayınlanmamış olabilir.")
         return None
 
     teams = match.get("teams", {})
@@ -139,7 +141,7 @@ def show_lineups(fixture_id):
         st.error(f"Kadro isteği başarısız: {err}")
         return
     if not data:
-        st.info("Kadro açıklanmamış olabilir veya ücretsiz API kapsamına girmiyor.")
+        st.info("API bu maç için kadro döndürmedi. Kadrolar genellikle maçtan kısa süre önce açıklanır; ayrıca lig/maç kapsamı planınıza dahil olmayabilir.")
         return
     st.subheader("Kadro bilgileri")
     cols = st.columns(min(2, len(data)))
@@ -194,42 +196,44 @@ def analyze_match(match, stats, odds_rows):
     status = match.get("fixture", {}).get("status", {})
     elapsed = status.get("elapsed")
     home_goals, away_goals = goals.get("home"), goals.get("away")
-    if not stats:
-        st.warning("**Karar: PAS GEÇ.** İstatistik verisi yok; güvenilir maç içi değerlendirme yapılamıyor.")
-        return
-
-    hr, ar = stats["home_rows"], stats["away_rows"]
-    h_on, a_on = stat_value(hr, ["Shots on Goal"]), stat_value(ar, ["Shots on Goal"])
-    h_sh, a_sh = stat_value(hr, ["Total Shots"]), stat_value(ar, ["Total Shots"])
-    h_cor, a_cor = stat_value(hr, ["Corner Kicks"]), stat_value(ar, ["Corner Kicks"])
-    h_pos, a_pos = stat_value(hr, ["Ball Possession"]), stat_value(ar, ["Ball Possession"])
-    h_xg, a_xg = stat_value(hr, ["Expected Goals", "expected_goals"]), stat_value(ar, ["Expected Goals", "expected_goals"])
-
+    hr, ar = [], []
     metrics = []
-    if h_on is not None and a_on is not None: metrics.append(("İsabetli şut", h_on, a_on))
-    if h_sh is not None and a_sh is not None: metrics.append(("Toplam şut", h_sh, a_sh))
-    if h_cor is not None and a_cor is not None: metrics.append(("Korner", h_cor, a_cor))
-    if h_pos is not None and a_pos is not None: metrics.append(("Topla oynama (%)", h_pos, a_pos))
-    if h_xg is not None and a_xg is not None: metrics.append(("Beklenen gol (xG)", h_xg, a_xg))
-    if metrics:
+    h_on = a_on = h_sh = a_sh = h_cor = a_cor = h_pos = a_pos = h_xg = a_xg = None
+    if not stats:
+        st.warning("Bu maçta istatistik verisi API tarafından döndürülmedi. Aşağıda skor, dakika ve mevcut oranlar ayrıca incelenecek; istatistik varmış gibi varsayım yapılmayacak.")
+    else:
+        hr, ar = stats["home_rows"], stats["away_rows"]
+        h_on, a_on = stat_value(hr, ["Shots on Goal"]), stat_value(ar, ["Shots on Goal"])
+        h_sh, a_sh = stat_value(hr, ["Total Shots"]), stat_value(ar, ["Total Shots"])
+        h_cor, a_cor = stat_value(hr, ["Corner Kicks"]), stat_value(ar, ["Corner Kicks"])
+        h_pos, a_pos = stat_value(hr, ["Ball Possession"]), stat_value(ar, ["Ball Possession"])
+        h_xg, a_xg = stat_value(hr, ["Expected Goals", "expected_goals"]), stat_value(ar, ["Expected Goals", "expected_goals"])
+        if h_on is not None and a_on is not None: metrics.append(("İsabetli şut", h_on, a_on))
+        if h_sh is not None and a_sh is not None: metrics.append(("Toplam şut", h_sh, a_sh))
+        if h_cor is not None and a_cor is not None: metrics.append(("Korner", h_cor, a_cor))
+        if h_pos is not None and a_pos is not None: metrics.append(("Topla oynama (%)", h_pos, a_pos))
+        if h_xg is not None and a_xg is not None: metrics.append(("Beklenen gol (xG)", h_xg, a_xg))
+    if metrics and stats:
         st.dataframe([{"Gösterge": name, stats["home_name"]: hv, stats["away_name"]: av}
                       for name, hv, av in metrics], use_container_width=True, hide_index=True)
 
     notes = []
-    if h_on is not None and a_on is not None:
+    if stats and h_on is not None and a_on is not None:
         if h_on + a_on >= 5: notes.append(f"İki takım toplam {int(h_on+a_on)} isabetli şuta ulaştı.")
         if abs(h_on-a_on) >= 3: notes.append(f"İsabetli şut üstünlüğü: {stats['home_name'] if h_on>a_on else stats['away_name']}.")
-    if h_sh is not None and a_sh is not None and h_sh+a_sh >= 14:
+    if stats and h_sh is not None and a_sh is not None and h_sh+a_sh >= 14:
         notes.append(f"Toplam şut sayısı yüksek ({int(h_sh+a_sh)}).")
-    if h_cor is not None and a_cor is not None and h_cor+a_cor >= 7:
+    if stats and h_cor is not None and a_cor is not None and h_cor+a_cor >= 7:
         notes.append(f"Toplam korner {int(h_cor+a_cor)}; korner pazarını değerlendirirken kalan süre ve skor da gerekir.")
-    if h_xg is not None and a_xg is not None:
+    if stats and h_xg is not None and a_xg is not None:
         notes.append(f"xG toplamı {h_xg+a_xg:.2f}. Bu değer yalnızca sağlayıcı verisi varsa gösterilir.")
     if elapsed is not None:
         notes.append(f"Maç dakikası: {elapsed}'. Son 5/10/15 dakika ayrıntısı API tarafından ayrı olay zaman serisi olarak sunulmadıkça hesaplanamaz.")
+    if elapsed is not None:
+        st.write(f"**Mevcut skor:** {home_goals if home_goals is not None else '—'} - {away_goals if away_goals is not None else '—'} | **Dakika:** {elapsed}'")
     if notes:
         for n in notes: st.write("• " + n)
-    else:
+    elif stats:
         st.info("İstatistiklerden güçlü bir sinyal çıkmadı.")
 
     # Conservative recommendation: do not claim a proven predictive model.
@@ -251,7 +255,10 @@ def analyze_match(match, stats, odds_rows):
     else:
         st.info("Oran verisi olmadığı için oran bazlı aday listesi oluşturulamadı.")
 
-    st.warning("**Karar: Şimdilik PAS GEÇ / ek veri bekle.** Bu sürümde son 5–15 dakika olay akışı, açılış oranı geçmişi, tüm liglerde form verisi ve geçmiş maçlarla doğrulanmış olasılık modeli yok. Bu veriler olmadan otomatik 'kesin oyna' demek yanıltıcı olur.")
+    if not stats:
+        st.warning("**Karar: PAS GEÇ.** Bu maç için istatistik verisi olmadığı ve oran geçmişi bulunmadığı için güvenilir bir 'oyna' sinyali üretilemiyor. Oranları gösterebiliriz ancak tek başına oran, avantaj kanıtı değildir.")
+    else:
+        st.warning("**Karar: Şimdilik PAS GEÇ / ek veri bekle.** Bu sürümde açılış oranı geçmişi ve geçmiş maçlarla doğrulanmış olasılık modeli yok. İstatistikler gösterilir; fakat bunlar tek başına güvenilir bahis önerisi sayılmaz.")
 
 def show_matches(matches, prefix):
     if not matches:
@@ -335,6 +342,8 @@ with info_tab:
 - Mevcutsa kadro ve bahis oranları.
 - Oranın ham olasılığı: 100 / oran. Bu, gerçek kazanma olasılığı değildir ve şirket marjını içerebilir.
 - **Maçı analiz et** düğmesi mevcut istatistikleri ve oranları bir araya getirir.
+- API çağrıları kısa süre önbelleğe alınır; sayfa yenilenince ücretsiz günlük limit gereksiz yere tüketilmez.
+- İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
 - Bu sürüm otomatik bahis yapmaz. Doğrulanmış tahmin modeli, açılış oranı geçmişi ve tüm liglerde son dakika hareketleri henüz mevcut değildir.
 - API ücretsiz planı tüm lig, istatistik ve pazarları kapsamayabilir. API anahtarını kodun içine yazmayın; Secrets bölümünde saklayın.
