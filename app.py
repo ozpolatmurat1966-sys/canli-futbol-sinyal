@@ -11,17 +11,36 @@ st.set_page_config(page_title="Futbol Analiz Merkezi", page_icon="⚽", layout="
 
 st.markdown("""
 <style>
-.stApp { background: linear-gradient(145deg, #07131f 0%, #0b1b2a 55%, #102b35 100%); }
-[data-testid="stHeader"] { background: rgba(7,19,31,.88); }
-[data-testid="stSidebar"] { background: #0a1925; }
-div[data-testid="stMetric"], div[data-testid="stExpander"] {
-  background: rgba(17,37,52,.72); border: 1px solid rgba(75,150,160,.24);
-  border-radius: 12px; padding: .45rem;
+:root { color-scheme: light; }
+.stApp { background: #f4f6f8; color: #202a35; }
+[data-testid="stHeader"] { background: rgba(255,255,255,.96); border-bottom: 1px solid #e5e9ee; }
+[data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #e2e7ec; }
+[data-testid="stSidebar"] * { color: #263443; }
+h1, h2, h3, h4 { color: #172b3a !important; }
+p, label, .stMarkdown, [data-testid="stCaptionContainer"] { color: #344454; }
+div[data-testid="stMetric"] {
+  background: #ffffff; border: 1px solid #e1e7ec; border-top: 3px solid #e53238;
+  border-radius: 8px; padding: .75rem; box-shadow: 0 1px 3px rgba(20,35,50,.04);
 }
-.stButton > button { border-radius: 9px; border: 1px solid #1c9b86; background: #0c6b60; color: white; font-weight: 650; }
-.stButton > button:hover { background: #128575; border-color: #50d8bd; color: white; }
-[data-testid="stDataFrame"], [data-testid="stTable"] { border: 1px solid rgba(75,150,160,.25); border-radius: 10px; }
-h1, h2, h3 { color: #e5f6f4; }
+div[data-testid="stExpander"] { background: #ffffff; border: 1px solid #e1e7ec; border-radius: 8px; }
+div[data-testid="stTabs"] button[role="tab"] { color: #4b5967; font-weight: 600; }
+div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+  color: #d9212b; border-bottom-color: #d9212b;
+}
+.stButton > button {
+  border-radius: 7px; border: 1px solid #d9212b; background: #d9212b;
+  color: #ffffff; font-weight: 650; min-height: 2.5rem;
+}
+.stButton > button:hover { background: #b91c25; border-color: #b91c25; color: #ffffff; }
+.stButton > button:focus { box-shadow: 0 0 0 .2rem rgba(217,33,43,.18); }
+[data-testid="stDataFrame"], [data-testid="stTable"] {
+  background: #ffffff; border: 1px solid #e1e7ec; border-radius: 8px;
+}
+input, textarea, [data-baseweb="select"] > div {
+  background-color: #ffffff !important; color: #202a35 !important; border-color: #d7dfe6 !important;
+}
+[data-testid="stAlert"] { border-radius: 8px; }
+hr { border-color: #e1e7ec; }
 </style>
 """, unsafe_allow_html=True)
 
