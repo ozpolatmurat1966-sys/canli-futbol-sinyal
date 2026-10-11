@@ -162,7 +162,7 @@ if APP_PASSWORD and not st.session_state.get("authenticated", False):
             st.error("Şifre yanlış.")
     st.stop()
 
-API_KEY = str(secret("API_FOOTBALL_KEY", "")).strip()
+API_KEY = ""
 FOOTBALL_DATA_TOKEN = str(secret("FOOTBALL_DATA_TOKEN", "")).strip()
 SPORTMONKS_API_TOKEN = str(secret("SPORTMONKS_API_TOKEN", "")).strip()
 BSD_API_TOKEN = str(secret("BSD_API_TOKEN", "")).strip()
@@ -183,7 +183,7 @@ def provider_status_table():
     statuses = st.session_state.get("provider_statuses", {})
     rows = []
     for name, configured in [
-        ("API-Football", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+        ("Eski API", bool(API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
         ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("TheSportsDB", True), ("ESPN", True), ("OpenLigaDB", True)
     ]:
         item = statuses.get(name, {})
@@ -205,7 +205,7 @@ st.title("⚽ Futbol Analiz Merkezi")
 st.caption("Canlı maçlar • Fikstür • İstatistikler • Oranlar • Veri temelli değerlendirme")
 st.warning("Bu uygulama otomatik bahis oynamaz ve kazancı garanti etmez. Yalnızca veri temelli değerlendirme sunar. Veriler eksikse doğru karar 'Pas geç' olabilir.")
 
-if not API_KEY and not SPORTMONKS_API_TOKEN:
+if False and not API_KEY and not SPORTMONKS_API_TOKEN:
     st.error("Canlı veri için en az bir sağlayıcı anahtarı gerekli. API_FOOTBALL_KEY veya SPORTMONKS_API_TOKEN ekleyin.")
     st.code('API_FOOTBALL_KEY = "API_ANAHTARINIZ"\nSPORTMONKS_API_TOKEN = "SPORTMONKS_TOKENINIZ"\nAPP_PASSWORD = "KENDI_SIFRENIZ"')
     st.stop()
@@ -1109,7 +1109,7 @@ def estimate_live_signals(match, stats):
 def analyze_match(match, stats, odds_rows):
     st.subheader("🤖 Otomatik maç değerlendirmesi")
     fixture_id_for_prediction = match.get("fixture", {}).get("id")
-    if API_KEY and str(fixture_id_for_prediction or "").isdigit():
+    if False and str(fixture_id_for_prediction or "").isdigit():
         with st.expander("📊 API-Football model tahmini ve takım karşılaştırması", expanded=False):
             prediction_data, prediction_err, _ = api_get("predictions", {"fixture": int(fixture_id_for_prediction)})
             if prediction_err:
@@ -1541,7 +1541,7 @@ with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     if st.button("Canlı maçları yükle / yenile"):
         with st.spinner("Canlı maçlar yükleniyor..."):
-            if API_KEY:
+            if False and API_KEY:
                 data, err, _ = api_get("fixtures", {"live": "all"})
             else:
                 data, err = None, "API-Football anahtarı tanımlı değil."
