@@ -12,38 +12,20 @@ from urllib.parse import quote_plus
 import os
 import json
 from signal_engine import build_trend_rows, summarize_odds_movements, format_telegram_message
+from model_engine import calibrate_probability, evaluate_calibration
+from player_props import extract_player_prop_rows
 
 def history_db_connect():
-    """Local SQLite store; configure FOOTBALL_HISTORY_DB_PATH for a persistent mounted path."""
-    path = os.getenv("FOOTBALL_HISTORY_DB_PATH", "football_history.sqlite3")
-    conn = sqlite3.connect(path, timeout=8)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""CREATE TABLE IF NOT EXISTS fixtures (
-        fixture_key TEXT PRIMARY KEY, source TEXT, match_date TEXT, league TEXT,
-        home TEXT, away TEXT, status TEXT, minute INTEGER, home_goals INTEGER,
-        away_goals INTEGER, finished INTEGER DEFAULT 0, last_seen TEXT, raw_json TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS snapshots (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT NOT NULL, observed_at TEXT NOT NULL,
-        minute INTEGER, status TEXT, home_goals INTEGER, away_goals INTEGER,
-        corners_home REAL, corners_away REAL, stats_json TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS odds_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT NOT NULL, observed_at TEXT NOT NULL,
-        market TEXT, option_name TEXT, bookmaker TEXT, odd REAL, stage TEXT, line TEXT
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS predictions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT NOT NULL, created_at TEXT NOT NULL,
-        target TEXT NOT NULL, probability REAL NOT NULL, baseline_minute INTEGER,
-        baseline_home_goals INTEGER, baseline_away_goals INTEGER, baseline_corners REAL,
-        evaluated_result INTEGER, evaluated_at TEXT
-    )""")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_fixture_time ON snapshots(fixture_key, observed_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_odds_fixture_time ON odds_history(fixture_key, observed_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_fixture_time ON predictions(fixture_key, created_at)")
-    conn.commit()
-    return conn
+    """Use PostgreSQL when DATABASE_URL is configured; otherwise use local SQLite."""
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        try:
+            database_url = str(st.secrets.get("DATABASE_URL", "")).strip()
+        except Exception:
+            database_url = ""
+    from db_store import connect_history_db
+    return connect_history_db(database_url=database_url or None,
+                              sqlite_path=os.getenv("FOOTBALL_HISTORY_DB_PATH", "football_history.sqlite3"))
 
 def history_fixture_key(match):
     fixture = (match or {}).get("fixture") or {}
@@ -234,6 +216,20 @@ def history_load_summary():
         ORDER BY a.observed_at DESC LIMIT 100""").fetchall()
     conn.close()
     return fixtures, snapshots, odds_count, predictions, leagues, movements
+
+
+def history_calibrated_probability(target, raw_probability):
+    """Calibrate a live experimental probability only after enough resolved past predictions exist."""
+    try:
+        conn = history_db_connect()
+        rows = conn.execute(
+            "SELECT target, probability, evaluated_result, created_at FROM predictions WHERE evaluated_result IS NOT NULL ORDER BY created_at ASC"
+        ).fetchall()
+        calibrated, sample_count = calibrate_probability(rows, target, raw_probability, min_samples=50)
+        conn.close()
+        return calibrated, sample_count
+    except Exception:
+        return None, 0
 
 
 st.set_page_config(page_title="Futbol Analiz Merkezi", page_icon="⚽", layout="wide")
@@ -2426,10 +2422,23 @@ def show_odds(fixture_id, match=None):
                         add_price("Gol Alt/Üst", "Üst", quote.get("over"), bookmaker, stage.title(), line)
                         add_price("Gol Alt/Üst", "Alt", quote.get("under"), bookmaker, stage.title(), line)
                         break
+        # Player-prop markets are shown only if the provider explicitly returns player-labelled prices.
+        player_prop_rows = extract_player_prop_rows(payload)
+        for prop in player_prop_rows:
+            add_price(
+                f'Oyuncu pazarı: {prop["Pazar"]}',
+                f'{prop["Oyuncu"]} · {prop["Seçenek"]}',
+                prop["Oran"], prop["Şirket"], prop["Aşama"], prop["Çizgi"]
+            )
         if not rows:
-            st.info("5DollarFootballAPI yanıt verdi ancak bu maçta kullanılabilir oran bulunamadı.")
+            st.info("5DollarFootballAPI yanıt verdi ancak bu maçta kullanılabilir oran bulunamadı. Oyuncu pazarları da sağlayıcı yanıtında bulunmadı.")
             return []
         st.subheader("5DollarFootballAPI gerçek oranları")
+        if player_prop_rows:
+            st.markdown("**👤 Oyuncu bahis pazarları (sağlayıcı yanıtında bulunanlar)**")
+            st.dataframe(player_prop_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("Bu maç için sağlayıcı yanıtında açıkça tanımlanmış oyuncu prop oranı bulunmadı; oyuncu bahis oranı uydurulmadı.")
         st.caption("Her pazar için maç durumuna uygun en güncel mevcut aşama gösterilir: canlı maçta önce canlı oran, değilse kapanış/açılış. Oranlar sağlayıcıdan gelir; tahmin değildir.")
         st.dataframe([{k: v for k, v in row.items() if not k.startswith("_")} for row in rows], use_container_width=True, hide_index=True)
         show_odds_comparison(rows)
@@ -2740,14 +2749,31 @@ def analyze_match(match, stats, odds_rows):
     if corner_probability is not None and live_est.get("corner_total") is not None:
         history_store_prediction(match, "next10_corner", corner_probability / 100, prediction_minute,
                                  live_est.get("corner_total"))
-    if live_est.get("next10_goal_pct") is not None:
+    calibrated_goal, goal_calibration_n = history_calibrated_probability(
+        "next10_goal", goal_probability / 100 if goal_probability is not None else None
+    )
+    calibrated_corner, corner_calibration_n = history_calibrated_probability(
+        "next10_corner", corner_probability / 100 if corner_probability is not None else None
+    )
+    if goal_probability is not None:
         p1, p2, p3 = st.columns(3)
-        p1.metric("Önümüzdeki 10 dk. en az 1 gol", f"%{live_est['next10_goal_pct']}")
-        p2.metric(f"Ev sahibinin sonraki gol payı", f"%{live_est['home_share_pct']}")
-        p3.metric(f"Deplasmanın sonraki gol payı", f"%{live_est['away_share_pct']}")
-        if live_est.get("next10_corner_pct") is not None:
-            st.metric("Önümüzdeki 10 dk. en az 1 korner", f"%{live_est['next10_corner_pct']}")
-        st.caption("Deneysel başlangıç tahmini: genel oran varsayımı ve mevcut maç istatistikleri kullanılır. Geçmiş maçlarda kalibre edilmediği için gerçek kazanma olasılığı veya bahis tavsiyesi değildir. Korner tahmini için iki takımın korner sayısı gerekir.")
+        if calibrated_goal is not None:
+            p1.metric("10 dk. gol — geçmiş kalibrasyon", f"%{round(calibrated_goal * 100)}",
+                      help=f"Benzer geçmiş tahminlerden {goal_calibration_n} sonuçla düzeltilmiş. Garanti değildir.")
+        else:
+            p1.metric("10 dk. en az 1 gol — deneysel", f"%{goal_probability}")
+        p2.metric("Ev sahibinin sonraki gol payı", f"%{live_est['home_share_pct']}")
+        p3.metric("Deplasmanın sonraki gol payı", f"%{live_est['away_share_pct']}")
+        if corner_probability is not None:
+            if calibrated_corner is not None:
+                st.metric("10 dk. korner — geçmiş kalibrasyon", f"%{round(calibrated_corner * 100)}",
+                          help=f"Benzer geçmiş tahminlerden {corner_calibration_n} sonuçla düzeltilmiş. Garanti değildir.")
+            else:
+                st.metric("Önümüzdeki 10 dk. en az 1 korner — deneysel", f"%{corner_probability}")
+        if calibrated_goal is None and (corner_probability is None or calibrated_corner is None):
+            st.caption("Kalibrasyon için ilgili tahmin türünde en az 50 sonuçlanmış geçmiş örnek gerekir. Örnek sayısı yetersizse deneysel olasılık gösterilir; bahis kararı için doğrulanmış model sayılmaz.")
+        else:
+            st.caption("Kalibre edilen değer, geçmişteki benzer tahminlerin sonuçlarına göre düzeltilmiştir. Bu, bağımsız dış testte başarılı olduğu veya gelecekte kazanacağı anlamına gelmez.")
     else:
         st.info(live_est.get("note", "Canlı tahmin için yeterli veri yok."))
 
@@ -3781,6 +3807,24 @@ with history_tab:
     try:
         history_fixtures, history_snapshot_count, history_odds_count, history_predictions, history_leagues, history_movements = history_load_summary()
         evaluated = [p for p in history_predictions if p["evaluated_result"] is not None]
+        st.markdown("### Kalibre edilmiş olasılıkların zaman sıralı testi")
+        calibration_rows = [dict(p) for p in history_predictions]
+        calibration_metrics = []
+        for target, label in (("next10_goal", "Önümüzdeki 10 dk. gol"), ("next10_corner", "Önümüzdeki 10 dk. korner")):
+            result = evaluate_calibration(calibration_rows, target, min_samples=50)
+            if result.get("ready"):
+                calibration_metrics.append({
+                    "Tahmin": label, "Toplam sonuç": result["samples"],
+                    "Eğitim örneği": result["train_samples"], "Test örneği": result["test_samples"],
+                    "Test Brier (ham)": round(result["brier_raw"], 4),
+                    "Test Brier (kalibre)": round(result["brier_calibrated"], 4),
+                    "Kalibrasyon testi": "Daha iyi" if result["calibrated_better"] else "İyileşmedi"
+                })
+            else:
+                calibration_metrics.append({"Tahmin": label, "Toplam sonuç": result.get("samples", 0),
+                                            "Kalibrasyon testi": result.get("reason", "Yeterli örnek yok")})
+        st.dataframe(calibration_metrics, use_container_width=True, hide_index=True)
+        st.caption("Zaman sıralı testte eski kayıtlar eğitim, sonraki kayıtlar test olarak ayrılır. Yeterli örnek oluşana kadar sistem kalibre edilmiş güvenilir bahis olasılığı iddia etmez.")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Kaydedilen maç", len(history_fixtures))
         c2.metric("Skor/istatistik anlık kayıtları", history_snapshot_count)
