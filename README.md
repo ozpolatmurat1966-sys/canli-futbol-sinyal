@@ -80,3 +80,7 @@ Bu proje artık Streamlit oturumundan bağımsız bir toplayıcı içerir:
 - **API bağlantılarını şimdi test et** düğmesi, ayarlı 5DollarFootballAPI anahtarıyla lig ve canlı fikstür uç noktalarını örnek isteklerle kontrol eder. Kontrol sonucu ve zamanı veritabanına kaydedilir.
 - Veritabanı paneli gerçek maç, gözlem, oran, lig ve sanal bahis kayıtlarını sayar; aynı gün ve aynı takım eşleşmelerinde farklı skor kaydı bulunursa olası uyuşmazlıkları listeler.
 - Hazırlık tablosu, var olan özellikleri, yalnızca kısmi desteği olan özellikleri ve harici veri/anahtar gerektiren işleri açıkça ayırır. Bir özelliğin listede görünmesi onun her kaynakta çalıştığını garanti etmez.
+
+
+## Günlük fikstür toplama
+Bağımsız toplayıcı canlı maçlara ek olarak yaklaşık saatte bir İstanbul takvim gününün fikstür listesini sorgular. Böylece maç öncesi kayıtlar ve sonuçlanmış maçlar için veri seti birikmesine yardımcı olur. Bu özellik yalnızca sağlayıcının API anahtarının erişebildiği ve yanıtında döndürdüğü kayıtları toplar; tüm tarihsel sezonları geriye dönük doldurmaz.
