@@ -75,9 +75,15 @@ def normalize_fixture(item):
     if not home or not away:
         return None
     goals = item.get("goals") or item.get("score") or {}
-    raw_status = str(item.get("status") or item.get("state") or item.get("status_name") or item.get("status_code") or "unknown").strip()
+    status_obj = item.get("status")
+    if isinstance(status_obj, dict):
+        raw_status = str(status_obj.get("long") or status_obj.get("name") or status_obj.get("short") or item.get("state") or item.get("status_name") or item.get("status_code") or "unknown").strip()
+        status_minute = status_obj.get("elapsed")
+    else:
+        raw_status = str(status_obj or item.get("state") or item.get("status_name") or item.get("status_code") or "unknown").strip()
+        status_minute = None
     status_lower = raw_status.lower().replace("-", "_").replace(" ", "_")
-    minute = item.get("minute", item.get("elapsed"))
+    minute = item.get("minute", item.get("elapsed", status_minute))
     try:
         minute = int(minute) if minute is not None else None
     except (TypeError, ValueError):
