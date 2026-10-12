@@ -107,6 +107,7 @@ def inspect_database(db_connect):
             HAVING COUNT(*) > 1
         ) duplicate_groups""").fetchone()["n"]
         latest = conn.execute("SELECT MAX(last_seen) AS t FROM fixtures").fetchone()["t"]
+        heartbeat = conn.execute("SELECT run_at, status, detail FROM collector_runs ORDER BY id DESC LIMIT 1").fetchone()
         sources = conn.execute("""SELECT source, COUNT(*) AS fixtures, MAX(last_seen) AS last_seen
             FROM fixtures GROUP BY source ORDER BY fixtures DESC""").fetchall()
         markets = conn.execute("""SELECT COALESCE(market, 'Pazar belirtilmemiş') AS market,
@@ -141,7 +142,8 @@ def inspect_database(db_connect):
             "odds": odds_count, "leagues": inventory, "paper_settled": paper_settled,
             "stale_live": stale_live, "finished_missing_score": finished_missing_score,
             "invalid_odds": invalid_odds, "duplicate_odds_groups": int(duplicate_odds or 0),
-            "latest_fixture_seen": latest, "sources": [dict(r) for r in sources],
+            "latest_fixture_seen": latest, "collector_heartbeat": dict(heartbeat) if heartbeat else None,
+            "sources": [dict(r) for r in sources],
             "markets": [dict(r) for r in markets], "conflicts": conflicts[:100],
         }
     finally:
@@ -211,6 +213,11 @@ def render_readiness_center(st, db_connect, api_key):
         st.caption(f'Son maç kaydı: {metrics["latest_fixture_seen"]}')
     else:
         st.caption("Henüz kalıcı maç kaydı yok.")
+    heartbeat = metrics.get("collector_heartbeat")
+    if heartbeat:
+        st.caption(f'Collector son turu: {heartbeat["run_at"]} · durum: {heartbeat["status"]} · {heartbeat["detail"]}')
+    else:
+        st.caption("Bağımsız collector henüz bu veritabanına çalışma kaydı yazmamış.")
 
     with st.expander("Veri kalitesi göstergeleri", expanded=False):
         q1, q2, q3, q4 = st.columns(4)
@@ -256,7 +263,9 @@ def render_readiness_center(st, db_connect, api_key):
         ("8. Canlı baskı ve son dakika trendi", "Gözlem geçmişi mevcut" if snapshots_ready else "Yeterli canlı gözlem geçmişi gerekli"),
         ("9. Geriye dönük performans", f'{metrics["paper_settled"]} sonuçlanmış sanal bahis; model bazlı backtest ayrı doğrulanmalı'),
         ("10. Veri kalitesi ve kaynak uyuşmazlığı", "Olası skor farkları tespit ediliyor" if metrics["conflicts"] else "Kontrol çalıştı; uyuşmazlık bulunmadı"),
-        ("11. Kalıcılık ve otomatik çalışma", "PostgreSQL/Actions secrets ve son collector çalışması ayrıca doğrulanmalı"),
+        ("11. Kalıcılık ve otomatik çalışma",
+         (f'Collector son durumu: {metrics["collector_heartbeat"]["status"]} ({metrics["collector_heartbeat"]["run_at"]})'
+          if metrics.get("collector_heartbeat") else "Collector heartbeat kaydı yok; PostgreSQL/Actions secrets kontrol edilmeli")),
         ("12. iPhone/mobil kullanım", "Streamlit arayüzü mobilde kullanılabilir; cihaz üzerinde kullanılabilirlik testi gerekli"),
     ]
     st.markdown("### 12 maddenin güncel durumu")
