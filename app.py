@@ -412,7 +412,6 @@ def provider_status_table():
     statuses = st.session_state.get("provider_statuses", {})
     rows = []
     for name, configured in [
-        ("API-Football", bool(API_KEY)),
         ("APIFootball.com", bool(APIFOOTBALL_API_KEY)),
         ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)),
         ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
@@ -434,7 +433,7 @@ def provider_status_table():
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 for _name, _configured in [
-    ("API-Football", bool(API_KEY)), ("APIFootball.com", bool(APIFOOTBALL_API_KEY)), ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
+    ("APIFootball.com", bool(APIFOOTBALL_API_KEY)), ("5DollarFootballAPI", bool(FIVE_DOLLAR_FOOTBALL_API_KEY)), ("Sportmonks", bool(SPORTMONKS_API_TOKEN)),
     ("football-data.org", bool(FOOTBALL_DATA_TOKEN)), ("Bzzoiro Sports Data", bool(BSD_API_TOKEN)), ("ESPN", True), ("OpenLigaDB", True)
 ]:
     set_provider_status(_name, _configured)
