@@ -63,3 +63,13 @@ Bu proje artık Streamlit oturumundan bağımsız bir toplayıcı içerir:
 ## Oyuncu bahis pazarları
 - Uygulama ve bağımsız toplayıcı, sağlayıcı yanıtında açıkça bulunan oyuncu şut/gol/asist/kart gibi pazarları tanımaya çalışır ve varsa oran geçmişine kaydeder.
 - Desteklenen pazar adları ve yanıt şemaları sağlayıcıya göre değişir. Oyuncu istatistiği bulunması, o oyuncu için bahis oranı bulunduğu anlamına gelmez.
+
+
+## Gelişmiş özellikler (yeni)
+- **Küresel lig envanteri:** Canlı sinyaller sekmesindeki tarama düğmesi sağlayıcının `/leagues` listesini sayfalı olarak alır ve kalıcı veritabanına kaydeder. Bu, hesabın erişebildiği lig envanteridir; bütün dünyada her veri türünün kapsandığı anlamına gelmez.
+- **Oyna/Pas geç güvenlik kapısı:** Gerçek oran, güncel/tam veri, yeterli örnek ve doğrulanmış pazar olasılığı yoksa otomatik olarak **Pas geç** döndürür. Şimdiki deneysel 10 dakikalık tahminler genel bahis pazarları için model yerine kullanılmaz.
+- **Sanal bahis performansı:** Sonuçlanmış sanal bahis kayıtları olduğunda ROI, net sonuç ve maksimum düşüş hesaplanır. Henüz kayıt yoksa ROI uydurulmaz.
+- **Otomatik Telegram veri uyarıları:** Collector, skor veya korner değişimini algıladığında `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` ayarlıysa Telegram'a bir kez gönderir. Aynı olay tekrar gönderilmemesi için veritabanında tekilleştirilir.
+- **Kota koruması:** Collector canlı maçları ve desteklenen istatistik/olayları tek toplu istekte alır; GET isteklerinde 429/5xx yanıtlarına sınırlı yeniden deneme ve Retry-After desteği uygular. Oran istekleri ayrı ve daha seyrek yapılır.
+- **Pazar hazırlık tablosu:** 1X2, gol, korner, kart ve oyuncu pazarları için gözlenen oran verisi ile model doğrulama durumunu birbirinden ayırır.
+- Kalıcı lig envanteri ve otomatik Telegram için PostgreSQL `DATABASE_URL` ile Actions secrets içinde `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` ayarla. Anahtarları kod deposuna yazma.
