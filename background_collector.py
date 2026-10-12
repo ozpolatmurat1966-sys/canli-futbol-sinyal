@@ -15,6 +15,7 @@ from urllib3.util.retry import Retry
 
 from db_store import connect_history_db
 from player_props import extract_player_prop_rows
+from prediction_tracking import record_pre_match_predictions, settle_fixture_predictions
 
 API_BASE = "https://api.5dollarfootballapi.com/v1"
 API_KEY = os.getenv("FIVE_DOLLAR_FOOTBALL_API_KEY", "").strip()
@@ -419,6 +420,8 @@ def collect_today_fixtures(conn):
         save_snapshot(conn, match, (item.get("statistics") or item.get("stats")) if isinstance(item, dict) else None)
         saved += 1
     log.info("Today's Istanbul-day fixtures observed: %s", saved)
+    predictions_saved = record_pre_match_predictions(conn)
+    log.info("Pre-match model predictions recorded: %s", predictions_saved)
 
 
 def collect_historical_batch(conn):
@@ -516,6 +519,7 @@ def odds_movement_alert_lines(conn, key, min_abs_change=0.20, min_relative_chang
 
 def run_once(conn, cycle):
     retry_pending_telegram_alerts(conn)
+    settle_fixture_predictions(conn)
     collect_leagues_if_stale(conn)
     if cycle % DATE_FIXTURES_EVERY == 0:
         try:
