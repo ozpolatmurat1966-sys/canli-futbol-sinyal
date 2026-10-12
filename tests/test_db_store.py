@@ -13,7 +13,7 @@ class DatabaseStoreTests(unittest.TestCase):
             tables = {row[0] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()}
-            self.assertTrue({"fixtures", "snapshots", "odds_history", "predictions", "league_inventory", "alerts_sent", "paper_bets"}.issubset(tables))
+            self.assertTrue({"fixtures", "snapshots", "odds_history", "predictions", "league_inventory", "alerts_sent", "alerts_pending", "paper_bets"}.issubset(tables))
             conn.execute(
                 "INSERT INTO fixtures (fixture_key, source, home, away, last_seen) VALUES (?, ?, ?, ?, ?)",
                 ("test|1", "test", "Home", "Away", "2026-10-12T00:00:00+00:00")
