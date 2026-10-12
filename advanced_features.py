@@ -4,6 +4,7 @@ import requests
 
 from backtest_engine import evaluate_paper_bets
 from decision_engine import assess_market
+from readiness_center import render_readiness_center
 
 API_BASE = "https://api.5dollarfootballapi.com/v1"
 
@@ -210,3 +211,5 @@ def render_advanced_features(st, db_connect, api_key):
         st.caption("Bir pazarın oranının bulunması, o pazar için modelin eğitildiği veya doğrulandığı anlamına gelmez.")
     finally:
         conn.close()
+
+    render_readiness_center(st, db_connect, api_key)
