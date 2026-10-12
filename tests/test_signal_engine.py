@@ -44,7 +44,7 @@ class SignalEngineTests(unittest.TestCase):
         rows = build_pressure_rows(fixture, snapshots)
         self.assertTrue(rows)
         self.assertGreater(rows[0]["Ev sahibi baskı göstergesi"], rows[0]["Deplasman baskı göstergesi"])
-        self.assertIn("Gözlenen değişimler", rows[0]["Gözlenen değişimler"])
+        self.assertIn("Home FC", rows[0]["Gözlenen değişimler"])
 
     def test_pressure_indicator_is_empty_without_stats(self):
         rows = build_pressure_rows({"home": "A", "away": "B"}, [
