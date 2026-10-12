@@ -216,7 +216,7 @@ def send_telegram_alert(conn, fixture_key_value, match, change_lines):
     status = match.get("fixture", {}).get("status") or {}
     minute = status.get("elapsed")
     for change in change_lines:
-        message = f"⚽ {league}\\n{home} - {away}\\nDakika: {minute if minute is not None else '—'}\\n{change}\\n\\nYalnızca veri değişimi bildirimi; bahis tavsiyesi değildir."
+        message = f"⚽ {league}\n{home} - {away}\nDakika: {minute if minute is not None else '—'}\n{change}\n\nYalnızca veri değişimi bildirimi; bahis tavsiyesi değildir."
         alert_key = hashlib.sha256(f"{fixture_key_value}|{change}".encode("utf-8")).hexdigest()
         exists = conn.execute("SELECT alert_key FROM alerts_sent WHERE alert_key=?", (alert_key,)).fetchone()
         if exists:
