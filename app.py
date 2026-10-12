@@ -3992,15 +3992,36 @@ with signals_tab:
             trend_rows.extend(build_trend_rows(fixture_dict, snapshot_dicts))
             pressure_rows.extend(build_pressure_rows(fixture_dict, snapshot_dicts))
         conn.close()
+        mobile_cards = st.checkbox("📱 iPhone için kart görünümü", value=False, key="trend_mobile_cards")
         if trend_rows:
             st.markdown("### Son 5 / 10 / 15 dakikalık değişim")
-            st.dataframe(trend_rows, use_container_width=True, hide_index=True)
+            if mobile_cards:
+                for row in trend_rows[:80]:
+                    with st.container(border=True):
+                        st.markdown(f'**{row["Maç"]}**')
+                        st.caption(f'{row["Lig"]} · {row["Pencere"]}')
+                        c1, c2 = st.columns(2)
+                        c1.metric("Gol değişimi", row["Gol değişimi"] if row["Gol değişimi"] is not None else "Veri yok")
+                        c2.metric("Korner değişimi", row["Korner değişimi"] if row["Korner değişimi"] is not None else "Veri yok")
+                        st.caption(f'Skor: {row["Önceki skor"]} → {row["Son skor"]} · Korner: {row["Korner önce/sonra"]}')
+            else:
+                st.dataframe(trend_rows, use_container_width=True, hide_index=True)
             st.caption("Karşılaştırma, istenen zaman penceresinden önceki en yakın kayıt ile son kaydı kullanır. Yeterli geçmiş gözlemi yoksa o pencere gösterilmez; dakika alanı yerine kayıt zamanları esas alınır.")
         else:
             st.info("Henüz trend hesaplamak için yeterli aralıklı anlık kayıt yok. Canlı maçları yenile; ilk kayıtlar biriktikçe bu tablo oluşur.")
         if pressure_rows:
             st.markdown("### Canlı baskı göstergesi (gözlenen istatistiklerden)")
-            st.dataframe(pressure_rows, use_container_width=True, hide_index=True)
+            if mobile_cards:
+                for row in pressure_rows[:80]:
+                    with st.container(border=True):
+                        st.markdown(f'**{row["Maç"]}**')
+                        st.caption(row["Pencere"])
+                        c1, c2 = st.columns(2)
+                        c1.metric("Ev sahibi", row["Ev sahibi baskı göstergesi"] if row["Ev sahibi baskı göstergesi"] is not None else "Veri yok")
+                        c2.metric("Deplasman", row["Deplasman baskı göstergesi"] if row["Deplasman baskı göstergesi"] is not None else "Veri yok")
+                        st.caption(f'{row["Karşılaştırma"]} · {row["Gözlenen değişimler"]}')
+            else:
+                st.dataframe(pressure_rows, use_container_width=True, hide_index=True)
             st.caption("Gösterge, kayıtlı şut/korner/tehlikeli atak artışını ağırlıklandırır. Gol olasılığı veya bahis tavsiyesi değildir; sağlayıcı istatistiği eksikse taraf karşılaştırması yapılmaz.")
         else:
             st.info("Baskı göstergesi için aynı maçta zaman aralıklı şut/korner/tehlikeli atak istatistikleri henüz yok.")
