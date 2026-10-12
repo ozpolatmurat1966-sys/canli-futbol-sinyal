@@ -38,6 +38,8 @@ class TeamModelTests(unittest.TestCase):
         self.assertGreater(result["expected_goals_away"], 0)
         self.assertAlmostEqual(sum(m["probability"] for m in result["markets"][:3]), 1.0, places=4)
         self.assertTrue(all(0 <= m["probability"] <= 1 for m in result["markets"]))
+        self.assertFalse(any("korner" in m["market"].lower() or "kart" in m["market"].lower()
+                             for m in result["markets"]), "Missing corner/card data must not create markets.")
 
 
 if __name__ == "__main__":
