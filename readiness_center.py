@@ -156,10 +156,33 @@ def render_readiness_center(st, db_connect, api_key):
                       for name, row in checks_by_name.items()]
     finally:
         conn.close()
-    if checks:
-        st.dataframe([{"Bağlantı": c["provider"], "Durum": "Yanıt verdi" if c["ok"] else "Hata / erişim yok",
-                       "Ayrıntı": c["detail"], "Kontrol (UTC)": c.get("checked_at", "Bu oturum")} for c in checks],
-                     use_container_width=True, hide_index=True)
+    # Merge the app's own diagnostics from providers used during live-match loading.
+    app_statuses = st.session_state.get("provider_statuses", {})
+    check_names = {c.get("provider") for c in checks}
+    display_checks = [{
+        "Bağlantı": c["provider"], "Durum": "Yanıt verdi" if c["ok"] else "Hata / erişim yok",
+        "Ayrıntı": c["detail"], "Kontrol (UTC)": c.get("checked_at", "Bu oturum")
+    } for c in checks]
+    for name, item in app_statuses.items():
+        if name in check_names:
+            continue
+        configured = bool(item.get("configured"))
+        ok = item.get("ok")
+        if not configured and ok is None:
+            state = "Anahtar gerekli"
+        elif ok is True:
+            state = "Yanıt verdi"
+        elif ok is False:
+            state = "Hata / kota"
+        else:
+            state = "Henüz test edilmedi"
+        display_checks.append({
+            "Bağlantı": name, "Durum": state,
+            "Ayrıntı": item.get("detail", "Henüz test edilmedi"),
+            "Kontrol (UTC)": item.get("checked_at", "—"),
+        })
+    if display_checks:
+        st.dataframe(display_checks, use_container_width=True, hide_index=True)
     else:
         st.info("Henüz bağlantı testi yapılmadı. Yukarıdaki düğme sağlayıcının lig ve canlı fikstür uç noktalarını örnek kayıtla kontrol eder.")
 
