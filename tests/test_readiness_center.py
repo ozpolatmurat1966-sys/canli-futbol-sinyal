@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from db_store import connect_history_db
 from readiness_center import inspect_database, save_provider_checks, smoke_test_5dollar
-from background_collector import istanbul_day_window
+from background_collector import istanbul_day_window, normalize_fixture
 
 
 class FakeResponse:
@@ -75,6 +75,16 @@ class ReadinessCenterTests(unittest.TestCase):
         self.assertEqual(len(result["conflicts"]), 1)
         self.assertIn("1-0", result["conflicts"][0]["Farklı skorlar"])
         self.assertIn("2-0", result["conflicts"][0]["Farklı skorlar"])
+
+    def test_nested_provider_status_is_normalized(self):
+        match = normalize_fixture({
+            "id": 123, "teams": {"home": {"name": "Alpha"}, "away": {"name": "Beta"}},
+            "status": {"short": "2H", "long": "Second Half", "elapsed": 67},
+            "goals": {"home": 1, "away": 0},
+        })
+        self.assertIsNotNone(match)
+        self.assertEqual(match["fixture"]["status"]["short"], "LIVE")
+        self.assertEqual(match["fixture"]["status"]["elapsed"], 67)
 
     def test_istanbul_day_window_is_24_hours(self):
         from datetime import datetime, timezone
