@@ -1,5 +1,6 @@
 """Operational readiness, provider smoke tests and cross-source data quality checks."""
 from datetime import datetime, timezone
+import os
 import json
 import re
 import unicodedata
@@ -40,6 +41,7 @@ def smoke_test_5dollar(api_key):
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     checks = []
     for label, path, params in (
+        ("5DollarFootballAPI /status", "/status", {}),
         ("5DollarFootballAPI /leagues", "/leagues", {"page": 1, "per_page": 1}),
         ("5DollarFootballAPI /fixtures", "/fixtures", {"status": "live", "per_page": 1}),
     ):
@@ -154,6 +156,16 @@ def render_readiness_center(st, db_connect, api_key):
     st.markdown("---")
     st.subheader("🧰 12 başlık için sistem hazırlık merkezi")
     st.caption("Bu panel gerçek kayıtlara ve isteğe bağlı bağlantı testine dayanır. Yeşil durum yalnızca kontrol edilen kısmın yanıt verdiğini gösterir; tüm ligleri veya tüm bahis pazarlarını garanti etmez.")
+    database_url = os.getenv("DATABASE_URL", "").strip()
+    if not database_url:
+        try:
+            database_url = str(st.secrets.get("DATABASE_URL", "")).strip()
+        except Exception:
+            database_url = ""
+    if not database_url:
+        st.warning("Kalıcı DATABASE_URL bulunamadı. Uygulama yerel SQLite kullanıyor olabilir; barındırma yeniden başlatıldığında geçmiş verilerin korunacağı garanti edilmez ve arka plan toplayıcısı kalıcı veritabanına yazamaz.")
+    if not str(api_key or "").strip():
+        st.warning("FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil. Sağlayıcı canlı verileri, lig envanteri ve oran bağlantıları doğrulanamaz.")
     if st.button("🔎 API bağlantılarını şimdi test et", key="run_readiness_provider_checks"):
         with st.spinner("Sağlayıcı bağlantıları kontrol ediliyor..."):
             checks = smoke_test_5dollar(api_key)
