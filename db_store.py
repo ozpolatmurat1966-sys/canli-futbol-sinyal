@@ -32,6 +32,9 @@ SCHEMA = [
         last_fixture_utc TEXT, is_popular INTEGER DEFAULT 0, observed_at TEXT,
         UNIQUE(provider, provider_league_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS provider_health (
+        provider TEXT PRIMARY KEY, ok INTEGER NOT NULL DEFAULT 0, detail TEXT, checked_at TEXT
+    )""",
     """CREATE TABLE IF NOT EXISTS alerts_sent (
         alert_key TEXT PRIMARY KEY, fixture_key TEXT, sent_at TEXT, message TEXT
     )""",
