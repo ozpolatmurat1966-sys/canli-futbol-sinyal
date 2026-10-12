@@ -326,4 +326,23 @@ def render_advanced_features(st, db_connect, api_key):
         with st.expander(f"Örnek yetersiz olduğu için model üretmeyen maçlar ({len(model_missing)})"):
             st.dataframe(model_missing[:40], use_container_width=True, hide_index=True)
 
+    st.markdown("#### 🧪 Otomatik model doğrulaması")
+    st.caption("Bu tablo yalnızca uygulamanın kaydettiği deneysel model tahminlerinin maç sonucu geldikten sonra hesaplanan Brier skorunu gösterir. Küçük örneklem başarı kanıtı değildir.")
+    conn = db_connect()
+    try:
+        validation_rows = conn.execute("""SELECT target, COUNT(*) AS samples,
+            AVG((probability - evaluated_result) * (probability - evaluated_result)) AS brier
+            FROM predictions WHERE target LIKE 'team_poisson_v1:%' AND evaluated_result IN (0, 1)
+            GROUP BY target ORDER BY target""").fetchall()
+        if validation_rows:
+            st.dataframe([{
+                "Pazar": str(row["target"]).replace("team_poisson_v1:", ""),
+                "Sonuçlanan örnek": int(row["samples"]),
+                "Brier skoru": round(float(row["brier"]), 4) if row["brier"] is not None else None,
+            } for row in validation_rows], use_container_width=True, hide_index=True)
+        else:
+            st.info("Otomatik doğrulama için henüz kaydedilmiş ve sonucu tamamlanmış model tahmini yok. Kalıcı veritabanı ve yeterli geçmiş sonuçlar gerekir.")
+    finally:
+        conn.close()
+
     render_readiness_center(st, db_connect, api_key)
