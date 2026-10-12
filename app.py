@@ -9,6 +9,232 @@ from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
 
+import os
+import json
+
+def history_db_connect():
+    """Local SQLite store; configure FOOTBALL_HISTORY_DB_PATH for a persistent mounted path."""
+    path = os.getenv("FOOTBALL_HISTORY_DB_PATH", "football_history.sqlite3")
+    conn = sqlite3.connect(path, timeout=8)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fixtures (
+        fixture_key TEXT PRIMARY KEY, source TEXT, match_date TEXT, league TEXT,
+        home TEXT, away TEXT, status TEXT, minute INTEGER, home_goals INTEGER,
+        away_goals INTEGER, finished INTEGER DEFAULT 0, last_seen TEXT, raw_json TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT NOT NULL, observed_at TEXT NOT NULL,
+        minute INTEGER, status TEXT, home_goals INTEGER, away_goals INTEGER,
+        corners_home REAL, corners_away REAL, stats_json TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS odds_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT NOT NULL, observed_at TEXT NOT NULL,
+        market TEXT, option_name TEXT, bookmaker TEXT, odd REAL, stage TEXT, line TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS predictions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT NOT NULL, created_at TEXT NOT NULL,
+        target TEXT NOT NULL, probability REAL NOT NULL, baseline_minute INTEGER,
+        baseline_home_goals INTEGER, baseline_away_goals INTEGER, baseline_corners REAL,
+        evaluated_result INTEGER, evaluated_at TEXT
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_fixture_time ON snapshots(fixture_key, observed_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_odds_fixture_time ON odds_history(fixture_key, observed_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_fixture_time ON predictions(fixture_key, created_at)")
+    conn.commit()
+    return conn
+
+def history_fixture_key(match):
+    fixture = (match or {}).get("fixture") or {}
+    source = (match or {}).get("_source") or (match or {}).get("source") or "unknown"
+    fid = fixture.get("id") or (match or {}).get("id")
+    teams = (match or {}).get("teams") or {}
+    home = (teams.get("home") or {}).get("name") or "home"
+    away = (teams.get("away") or {}).get("name") or "away"
+    kickoff = fixture.get("date") or ""
+    identity = str(fid) if fid is not None else f"{kickoff}|{home}|{away}"
+    return f"{source}|{identity}"
+
+def history_score(match):
+    goals = (match or {}).get("goals") or {}
+    try:
+        home = int(goals.get("home")) if goals.get("home") is not None else None
+        away = int(goals.get("away")) if goals.get("away") is not None else None
+    except (TypeError, ValueError):
+        return None, None
+    return home, away
+
+def history_corners(match, stats=None):
+    pair = (match or {}).get("corners") or {}
+    home = pair.get("home") if isinstance(pair, dict) else None
+    away = pair.get("away") if isinstance(pair, dict) else None
+    if stats:
+        for side, key in (("home", "home_rows"), ("away", "away_rows")):
+            for row in (stats.get(key) or []):
+                if "corner" in str(row.get("type", "")).lower() and row.get("value") is not None:
+                    if side == "home": home = row.get("value")
+                    else: away = row.get("value")
+    def as_num(value):
+        try: return float(str(value).replace("%", "").strip()) if value is not None else None
+        except (TypeError, ValueError): return None
+    return as_num(home), as_num(away)
+
+def history_store_snapshot(match, stats=None):
+    try:
+        fixture = (match or {}).get("fixture") or {}
+        teams = (match or {}).get("teams") or {}
+        league = (match or {}).get("league") or {}
+        status_obj = fixture.get("status") or {}
+        status = str(status_obj.get("short") or status_obj.get("long") or "unknown")
+        try: minute = int(status_obj.get("elapsed")) if status_obj.get("elapsed") is not None else None
+        except (TypeError, ValueError): minute = None
+        home_goals, away_goals = history_score(match)
+        corners_home, corners_away = history_corners(match, stats)
+        home = (teams.get("home") or {}).get("name") or "Ev sahibi"
+        away = (teams.get("away") or {}).get("name") or "Deplasman"
+        source = (match or {}).get("_source") or (match or {}).get("source") or "unknown"
+        match_date = fixture.get("date") or ""
+        league_name = league.get("name") or league.get("country") or "Lig bilinmiyor"
+        finished = status.upper() in ("FT", "AET", "PEN", "FINISHED", "MATCH FINISHED", "FULL_TIME")
+        now = datetime.now(timezone.utc).isoformat()
+        key = history_fixture_key(match)
+        conn = history_db_connect()
+        conn.execute("""INSERT INTO fixtures
+            (fixture_key, source, match_date, league, home, away, status, minute, home_goals, away_goals, finished, last_seen, raw_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(fixture_key) DO UPDATE SET source=excluded.source, match_date=excluded.match_date,
+            league=excluded.league, home=excluded.home, away=excluded.away, status=excluded.status,
+            minute=excluded.minute, home_goals=excluded.home_goals, away_goals=excluded.away_goals,
+            finished=excluded.finished, last_seen=excluded.last_seen, raw_json=excluded.raw_json""",
+            (key, source, str(match_date), str(league_name), str(home), str(away), status, minute,
+             home_goals, away_goals, int(finished), now, json.dumps(match, ensure_ascii=False, default=str)))
+        last = conn.execute("SELECT * FROM snapshots WHERE fixture_key=? ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+        changed = (not last or last["minute"] != minute or last["status"] != status
+                   or last["home_goals"] != home_goals or last["away_goals"] != away_goals
+                   or (corners_home is not None and last["corners_home"] != corners_home)
+                   or (corners_away is not None and last["corners_away"] != corners_away))
+        aged = True
+        if last:
+            try:
+                last_time = datetime.fromisoformat(last["observed_at"])
+                aged = (datetime.now(timezone.utc) - last_time.astimezone(timezone.utc)).total_seconds() >= 75
+            except (TypeError, ValueError):
+                aged = True
+        if changed or aged:
+            conn.execute("""INSERT INTO snapshots
+                (fixture_key, observed_at, minute, status, home_goals, away_goals, corners_home, corners_away, stats_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (key, now, minute, status, home_goals, away_goals, corners_home, corners_away,
+                 json.dumps(stats, ensure_ascii=False, default=str) if stats else None))
+        conn.commit()
+        conn.close()
+    except Exception:
+        return
+
+def history_store_fixtures(matches):
+    for match in (matches or []):
+        history_store_snapshot(match)
+
+def history_store_odds(match, odds_rows):
+    if not odds_rows: return
+    try:
+        key = history_fixture_key(match)
+        now = datetime.now(timezone.utc).isoformat()
+        conn = history_db_connect()
+        for row in odds_rows:
+            odd = row.get("_odd") or row.get("Oran")
+            try: odd = float(odd) if odd is not None else None
+            except (TypeError, ValueError): odd = None
+            if odd is None or odd <= 1: continue
+            conn.execute("""INSERT INTO odds_history
+                (fixture_key, observed_at, market, option_name, bookmaker, odd, stage, line)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (key, now, str(row.get("_market") or row.get("Pazar") or "Pazar"),
+                 str(row.get("_option") or row.get("Seçenek") or "—"),
+                 str(row.get("_bookmaker") or row.get("Sağlayıcı") or "—"), odd,
+                 str(row.get("Oran aşaması") or row.get("stage") or "—"), str(row.get("line") or "")))
+        conn.commit()
+        conn.close()
+    except Exception:
+        return
+
+def history_store_prediction(match, target, probability, minute=None, corners_total=None):
+    try:
+        if probability is None: return
+        probability = max(0.0, min(1.0, float(probability)))
+        home_goals, away_goals = history_score(match)
+        key = history_fixture_key(match)
+        now = datetime.now(timezone.utc).isoformat()
+        conn = history_db_connect()
+        exists = conn.execute("""SELECT id FROM predictions WHERE fixture_key=? AND target=?
+            AND COALESCE(baseline_minute,-1)=COALESCE(?,-1)
+            AND COALESCE(baseline_home_goals,-1)=COALESCE(?,-1)
+            AND COALESCE(baseline_away_goals,-1)=COALESCE(?,-1)
+            AND COALESCE(baseline_corners,-1)=COALESCE(?,-1) LIMIT 1""",
+            (key, target, minute, home_goals, away_goals, corners_total)).fetchone()
+        if not exists:
+            conn.execute("""INSERT INTO predictions
+                (fixture_key, created_at, target, probability, baseline_minute, baseline_home_goals,
+                 baseline_away_goals, baseline_corners) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (key, now, target, probability, minute, home_goals, away_goals, corners_total))
+        conn.commit()
+        conn.close()
+    except Exception:
+        return
+
+def history_evaluate_predictions(conn):
+    pending = conn.execute("SELECT * FROM predictions WHERE evaluated_result IS NULL").fetchall()
+    for pred in pending:
+        future = conn.execute("""SELECT * FROM snapshots WHERE fixture_key=? AND observed_at>=?
+            ORDER BY observed_at ASC""", (pred["fixture_key"], pred["created_at"])).fetchall()
+        try: created = datetime.fromisoformat(pred["created_at"])
+        except (TypeError, ValueError): created = None
+        eligible = None
+        for snap in future:
+            if not created: continue
+            try: observed = datetime.fromisoformat(snap["observed_at"])
+            except (TypeError, ValueError): continue
+            elapsed_seconds = (observed - created).total_seconds()
+            minute_delta = (snap["minute"] - pred["baseline_minute"]) if snap["minute"] is not None and pred["baseline_minute"] is not None else None
+            finished = str(snap["status"] or "").upper() in ("FT", "AET", "PEN", "FINISHED", "MATCH FINISHED", "FULL_TIME")
+            if elapsed_seconds >= 600 or (finished and minute_delta is not None and minute_delta >= 8):
+                eligible = snap
+                break
+        if eligible is None: continue
+        result = None
+        if pred["target"] == "next10_goal" and None not in (pred["baseline_home_goals"], pred["baseline_away_goals"], eligible["home_goals"], eligible["away_goals"]):
+            result = int(eligible["home_goals"] + eligible["away_goals"] > pred["baseline_home_goals"] + pred["baseline_away_goals"])
+        elif pred["target"] == "next10_corner" and pred["baseline_corners"] is not None and eligible["corners_home"] is not None and eligible["corners_away"] is not None:
+            result = int(eligible["corners_home"] + eligible["corners_away"] > pred["baseline_corners"])
+        if result is not None:
+            conn.execute("UPDATE predictions SET evaluated_result=?, evaluated_at=? WHERE id=?",
+                         (result, datetime.now(timezone.utc).isoformat(), pred["id"]))
+    conn.commit()
+
+def history_load_summary():
+    conn = history_db_connect()
+    history_evaluate_predictions(conn)
+    fixtures = conn.execute("SELECT * FROM fixtures ORDER BY last_seen DESC").fetchall()
+    snapshots = conn.execute("SELECT COUNT(*) AS n FROM snapshots").fetchone()["n"]
+    odds_count = conn.execute("SELECT COUNT(*) AS n FROM odds_history").fetchone()["n"]
+    predictions = conn.execute("SELECT * FROM predictions ORDER BY created_at DESC").fetchall()
+    leagues = conn.execute("""SELECT source, league, COUNT(*) AS fixtures,
+        SUM(CASE WHEN finished=1 THEN 1 ELSE 0 END) AS finished
+        FROM fixtures GROUP BY source, league ORDER BY fixtures DESC""").fetchall()
+    movements = conn.execute("""SELECT a.fixture_key, a.market, a.option_name, a.bookmaker,
+        a.odd AS latest_odd, b.odd AS previous_odd, a.observed_at, f.home, f.away, f.league
+        FROM odds_history a JOIN fixtures f ON f.fixture_key=a.fixture_key
+        LEFT JOIN odds_history b ON b.id=(
+          SELECT z.id FROM odds_history z WHERE z.fixture_key=a.fixture_key AND z.market=a.market
+          AND z.option_name=a.option_name AND z.bookmaker=a.bookmaker AND z.id<a.id ORDER BY z.id DESC LIMIT 1)
+        WHERE a.id=(SELECT MAX(z2.id) FROM odds_history z2 WHERE z2.fixture_key=a.fixture_key
+          AND z2.market=a.market AND z2.option_name=a.option_name AND z2.bookmaker=a.bookmaker)
+        AND b.odd IS NOT NULL AND ABS(a.odd-b.odd)>0.0001
+        ORDER BY a.observed_at DESC LIMIT 100""").fetchall()
+    conn.close()
+    return fixtures, snapshots, odds_count, predictions, leagues, movements
+
+
 st.set_page_config(page_title="Futbol Analiz Merkezi", page_icon="⚽", layout="wide")
 
 st.markdown("""
@@ -2502,6 +2728,17 @@ def analyze_match(match, stats, odds_rows):
 
     st.markdown("### ⏱️ Kısa vadeli olasılık tahminleri")
     live_est = estimate_live_signals(match, stats)
+    try:
+        prediction_minute = int(elapsed) if elapsed is not None else None
+    except (TypeError, ValueError):
+        prediction_minute = None
+    goal_probability = live_est.get("next10_goal_pct")
+    history_store_prediction(match, "next10_goal", goal_probability / 100 if goal_probability is not None else None,
+                             prediction_minute, live_est.get("corner_total"))
+    corner_probability = live_est.get("next10_corner_pct")
+    if corner_probability is not None and live_est.get("corner_total") is not None:
+        history_store_prediction(match, "next10_corner", corner_probability / 100, prediction_minute,
+                                 live_est.get("corner_total"))
     if live_est.get("next10_goal_pct") is not None:
         p1, p2, p3 = st.columns(3)
         p1.metric("Önümüzdeki 10 dk. en az 1 gol", f"%{live_est['next10_goal_pct']}")
@@ -2953,20 +3190,24 @@ def show_matches(matches, prefix):
                 show_player_statistics(fid, match)
             if st.session_state.get(f"stats_{fid}"):
                 stats = show_stats(fid, match)
+                history_store_snapshot(match, stats)
             if st.session_state.get(f"events_{fid}") and source_name == "5DollarFootballAPI":
                 show_five_dollar_events(fid, match)
             if st.session_state.get(f"lineup_{fid}"):
                 show_lineups(fid, match)
             if st.session_state.get(f"odds_{fid}"):
                 odds = show_odds(fid, match)
+                history_store_odds(match, odds)
             if st.session_state.get(f"analyze_{fid}"):
                 if stats is None:
                     stats = show_stats(fid, match)
+                    history_store_snapshot(match, stats)
                 if not odds:
                     odds = show_odds(fid, match)
+                history_store_odds(match, odds)
                 analyze_match(match, stats, odds)
 
-live_tab, date_tab, source_tab, analytics_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🛰️ Kaynak durumu", "📈 Takım / oyuncu analizi", "ℹ️ Program hakkında"])
+live_tab, date_tab, source_tab, analytics_tab, history_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🛰️ Kaynak durumu", "📈 Takım / oyuncu analizi", "📚 Geçmiş / performans", "ℹ️ Program hakkında"])
 with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     auto_refresh = st.checkbox("Canlı maçları otomatik yenile (30 saniye)", value=False, key="live_auto_refresh")
@@ -3203,6 +3444,7 @@ with live_tab:
             with st.spinner("Ek canlı kaynaklar birleştiriliyor ve tekrarlar ayıklanıyor..."):
                 data = merge_live_match_feeds(data or [])
             st.session_state["live_matches"] = data
+            history_store_fixtures(data)
             st.session_state["live_source"] = f"{source} + ek kaynak birleştirme"
             if data:
                 st.session_state.pop("live_notice", None)
@@ -3242,6 +3484,7 @@ with date_tab:
                 (fd_matches or []) + (oldb_matches or []) + (tsdb_matches or []) + (espn_matches or [])
             )
             st.session_state["date_matches"] = combined
+            history_store_fixtures(combined)
             st.session_state["date_label"] = chosen.isoformat()
             st.session_state["date_sources"] = {
                 "5DollarFootballAPI": len(five_matches or []),
@@ -3470,6 +3713,126 @@ with analytics_tab:
         elif "analytics_players_found" in st.session_state and not st.session_state.get("analytics_players_error"):
             st.info("Oyuncu bulunamadı. İsmi farklı yazmayı deneyebilirsin.")
     st.caption("Bu ekran otomatik bahis tahmini üretmez. API-Football v3 ve FootyStats anahtarı kullanılmaz; kaynak veri döndürmezse sonuç açıkça belirtilir.")
+
+with history_tab:
+    st.subheader("📚 Geçmiş veriler, oran hareketleri ve model performansı")
+    st.caption("Uygulama fikstürleri, gözlenen skorları, istenen istatistikleri, oran kayıtlarını ve deneysel tahminleri yerel SQLite veritabanına kaydeder. Geçmiş veri oluşmadan başarı ölçümü yapılamaz.")
+    try:
+        history_fixtures, history_snapshot_count, history_odds_count, history_predictions, history_leagues, history_movements = history_load_summary()
+        evaluated = [p for p in history_predictions if p["evaluated_result"] is not None]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Kaydedilen maç", len(history_fixtures))
+        c2.metric("Skor/istatistik anlık kayıtları", history_snapshot_count)
+        c3.metric("Oran gözlemi", history_odds_count)
+        c4.metric("Kaydedilen tahmin", len(history_predictions))
+        if evaluated:
+            brier = sum((float(p["probability"]) - int(p["evaluated_result"])) ** 2 for p in evaluated) / len(evaluated)
+            hit_rate = sum((float(p["probability"]) >= 0.5) == bool(p["evaluated_result"]) for p in evaluated) / len(evaluated)
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Değerlendirilen tahmin", len(evaluated))
+            p2.metric("Eşik %50 doğruluk", f"%{hit_rate * 100:.1f}")
+            p3.metric("Brier skoru", f"{brier:.3f}", help="0 daha iyi; bu metrik yalnızca değerlendirilebilen kaydedilmiş tahminleri kapsar.")
+            st.caption("Bu performans ölçümü, yeterli sıklıkta kaydedilmiş sonraki anlık görüntülerden sonucu belirlenebilen deneysel 10 dakikalık tahminlere aittir; gelecekteki başarıyı garanti etmez.")
+            grouped = {}
+            for p in evaluated:
+                grouped.setdefault(p["target"], []).append(p)
+            st.dataframe([{
+                "Tahmin türü": target,
+                "Değerlendirilen örnek": len(rows),
+                "Ortalama tahmin (%)": round(sum(float(x["probability"]) for x in rows) * 100 / len(rows), 1),
+                "Gerçekleşme (%)": round(sum(int(x["evaluated_result"]) for x in rows) * 100 / len(rows), 1),
+                "Brier skoru": round(sum((float(x["probability"]) - int(x["evaluated_result"])) ** 2 for x in rows) / len(rows), 3)
+            } for target, rows in grouped.items()], use_container_width=True, hide_index=True)
+        else:
+            st.info("Henüz sonuçla eşleştirilebilen tahmin yok. Canlı maçları düzenli yenile ve maç analizini aç; 10 dakikalık pencere için yeterli sonraki kayıt oluşunca ölçüm burada görünür.")
+        st.markdown("### Lig ve kaynak kapsamı — uygulamanın kaydettiği maçlar")
+        if history_leagues:
+            st.dataframe([dict(r) for r in history_leagues], use_container_width=True, hide_index=True)
+        else:
+            st.info("Henüz lig/kaynak geçmişi yok. Canlı maçları veya tarih fikstürünü yükle.")
+        st.markdown("### Son kaydedilen maçlar")
+        if history_fixtures:
+            fixture_rows = []
+            for row in history_fixtures[:100]:
+                fixture_rows.append({
+                    "Tarih": row["match_date"], "Lig": row["league"], "Kaynak": row["source"],
+                    "Maç": f'{row["home"]} - {row["away"]}',
+                    "Skor": f'{row["home_goals"] if row["home_goals"] is not None else "—"} - {row["away_goals"] if row["away_goals"] is not None else "—"}',
+                    "Durum": row["status"], "Dakika": row["minute"] if row["minute"] is not None else "—",
+                    "Son görüldü (UTC)": row["last_seen"]
+                })
+            st.dataframe(fixture_rows, use_container_width=True, hide_index=True)
+        st.markdown("### Oran hareketleri")
+        if history_movements:
+            st.dataframe([{
+                "Maç": f'{r["home"]} - {r["away"]}', "Lig": r["league"],
+                "Pazar": r["market"], "Seçenek": r["option_name"], "Şirket": r["bookmaker"],
+                "Önceki oran": r["previous_odd"], "Son oran": r["latest_odd"],
+                "Değişim": round(float(r["latest_odd"]) - float(r["previous_odd"]), 3),
+                "Gözlem (UTC)": r["observed_at"]
+            } for r in history_movements], use_container_width=True, hide_index=True)
+        else:
+            st.info("Oran hareketi için aynı maç/pazar/şirket oranının en az iki farklı zamanda kaydedilmesi gerekir. Oranları maç ekranından yükle.")
+        st.markdown("### Veri kalitesi ve canlı skor uyarıları")
+        now_utc = datetime.now(timezone.utc)
+        quality_rows = []
+        for row in history_fixtures[:500]:
+            problems = []
+            if not row["home"] or not row["away"] or row["home"] == "Ev sahibi" or row["away"] == "Deplasman":
+                problems.append("Takım adı eksik")
+            if row["home_goals"] is None or row["away_goals"] is None:
+                problems.append("Skor eksik")
+            try:
+                seen = datetime.fromisoformat(row["last_seen"])
+                age_min = (now_utc - seen.astimezone(timezone.utc)).total_seconds() / 60
+                if age_min > 15 and not row["finished"]:
+                    problems.append(f"Veri eski ({age_min:.0f} dk.)")
+            except (TypeError, ValueError):
+                problems.append("Güncelleme zamanı okunamadı")
+            if problems:
+                quality_rows.append({"Maç": f'{row["home"]} - {row["away"]}', "Kaynak": row["source"], "Kontrol": ", ".join(problems)})
+        if quality_rows:
+            st.dataframe(quality_rows[:100], use_container_width=True, hide_index=True)
+        else:
+            st.success("Kaydedilmiş maçlarda temel eksik alan veya 15 dakikadan eski canlı kayıt bulunmadı.")
+        recent_changes = []
+        conn = history_db_connect()
+        for row in history_fixtures[:300]:
+            snaps = conn.execute("SELECT * FROM snapshots WHERE fixture_key=? ORDER BY id DESC LIMIT 2", (row["fixture_key"],)).fetchall()
+            if len(snaps) < 2:
+                continue
+            newest, previous = snaps[0], snaps[1]
+            changed = (newest["home_goals"] != previous["home_goals"] or newest["away_goals"] != previous["away_goals"]
+                       or (newest["corners_home"] is not None and previous["corners_home"] is not None and newest["corners_home"] != previous["corners_home"])
+                       or (newest["corners_away"] is not None and previous["corners_away"] is not None and newest["corners_away"] != previous["corners_away"]))
+            if changed:
+                recent_changes.append({
+                    "Maç": f'{row["home"]} - {row["away"]}',
+                    "Önceki skor": f'{previous["home_goals"] if previous["home_goals"] is not None else "—"} - {previous["away_goals"] if previous["away_goals"] is not None else "—"}',
+                    "Son skor": f'{newest["home_goals"] if newest["home_goals"] is not None else "—"} - {newest["away_goals"] if newest["away_goals"] is not None else "—"}',
+                    "Önceki dakika": previous["minute"] if previous["minute"] is not None else "—",
+                    "Son dakika": newest["minute"] if newest["minute"] is not None else "—",
+                    "Gözlem (UTC)": newest["observed_at"]
+                })
+        conn.close()
+        if recent_changes:
+            st.warning("Kayıtlı anlık görüntüler arasında skor veya korner değişikliği görüldü.")
+            st.dataframe(recent_changes[:30], use_container_width=True, hide_index=True)
+        else:
+            st.caption("Henüz iki farklı anlık görüntü arasında skor/korner değişikliği tespit edilmedi. Bu panel uygulama içi uyarıdır; telefon bildirimi göndermez.")
+        st.markdown("### Veriyi dışa aktarma")
+        export_payload = json.dumps({
+            "fixtures": [dict(r) for r in history_fixtures],
+            "leagues": [dict(r) for r in history_leagues],
+            "predictions": [dict(r) for r in history_predictions],
+            "odds_movement": [dict(r) for r in history_movements],
+        }, ensure_ascii=False, default=str, indent=2)
+        st.download_button("📥 Geçmiş veriyi JSON indir", data=export_payload,
+                           file_name="futbol_analiz_gecmisi.json", mime="application/json")
+        st.caption("Kalıcı barındırma notu: varsayılan SQLite dosyası uygulama ortamında tutulur. Barındırma ortamı yeniden kurulursa dosya sıfırlanabilir. Kalıcı geçmiş için FOOTBALL_HISTORY_DB_PATH değişkenini kalıcı disk konumuna ayarlamak gerekir.")
+    except Exception as history_error:
+        st.error(f"Geçmiş/performans veritabanı açılamadı: {history_error}")
+        st.info("Varsayılan dosya yoluna yazma izni olmayabilir. FOOTBALL_HISTORY_DB_PATH ortam değişkenini yazılabilir kalıcı dizine ayarla.")
 
 with info_tab:
     st.subheader("Program hakkında")
