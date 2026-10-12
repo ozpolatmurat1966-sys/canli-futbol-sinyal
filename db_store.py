@@ -27,6 +27,19 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_snapshots_fixture_time ON snapshots(fixture_key, observed_at)",
     "CREATE INDEX IF NOT EXISTS idx_odds_fixture_time ON odds_history(fixture_key, observed_at)",
     "CREATE INDEX IF NOT EXISTS idx_predictions_fixture_time ON predictions(fixture_key, created_at)",
+    """CREATE TABLE IF NOT EXISTS league_inventory (
+        provider TEXT NOT NULL, provider_league_id TEXT NOT NULL, name TEXT, country TEXT,
+        last_fixture_utc TEXT, is_popular INTEGER DEFAULT 0, observed_at TEXT,
+        UNIQUE(provider, provider_league_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS alerts_sent (
+        alert_key TEXT PRIMARY KEY, fixture_key TEXT, sent_at TEXT, message TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS paper_bets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT, market TEXT, selection TEXT,
+        odds REAL, model_probability REAL, stake REAL, placed_at TEXT,
+        settled_result INTEGER, settled_at TEXT, status TEXT DEFAULT 'open'
+    )""",
 ]
 
 
