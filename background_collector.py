@@ -446,6 +446,15 @@ def run_once(conn, cycle):
                 log.warning("Odds unavailable for fixture %s: %s", fixture_id, str(exc)[:180])
 
 
+def record_collector_run(conn, status, detail):
+    try:
+        conn.execute("INSERT INTO collector_runs (run_at, status, detail) VALUES (?, ?, ?)",
+                     (datetime.now(timezone.utc).isoformat(), str(status), str(detail)[:500]))
+        conn.commit()
+    except Exception as exc:
+        log.warning("Could not persist collector heartbeat: %s", str(exc)[:160])
+
+
 def main():
     parser = argparse.ArgumentParser(description="Independent football history collector")
     parser.add_argument("--once", action="store_true", help="Run a single collection cycle and exit")
@@ -464,7 +473,9 @@ def main():
         started = time.monotonic()
         try:
             run_once(conn, cycle)
+            record_collector_run(conn, "success", f"Tur tamamlandı; cycle={cycle}")
         except Exception as exc:
+            record_collector_run(conn, "error", f"{type(exc).__name__}: {str(exc)[:420]}")
             log.exception("Collection cycle failed: %s", str(exc)[:220])
             if args.once:
                 conn.close()
