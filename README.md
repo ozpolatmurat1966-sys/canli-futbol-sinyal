@@ -92,3 +92,11 @@ Bağımsız toplayıcı canlı maçlara ek olarak yaklaşık saatte bir İstanbu
 - Sanal bahis kayıt defteri, model olasılığı manuel olarak önceden biliniyorsa Brier skorunu da hesaplar; model olasılığı boşsa doldurulmuş gibi varsayılmaz.
 - Veri kalite paneli eski canlı kayıtları, skoru eksik tamamlanmış maçları, geçersiz oranları ve tekrarlanan oran gruplarını gösterir.
 - Bağımsız collector her başarılı/başarısız tur için PostgreSQL'de heartbeat kaydı tutar; panelde son durum gösterilir.
+
+
+## Son sistem kontrolü ve oran analizi
+- Sistem hazırlık paneli artık API /status, /leagues ve canlı /fixtures bağlantılarını ayrı ayrı kontrol eder.
+- Pazar analizinde aynı maç/pazar/seçim/aşama için kaydedilmiş oranların belirgin değişimleri listelenir. Bunlar şike kanıtı değil, incelemeye değer oran hareketleridir.
+- Tam 1X2 oran üçlüsü varsa ham oran olasılıkları normalize edilerek yaklaşık marjdan arındırılmış piyasa dağılımı gösterilir. Bu bağımsız model tahmini değildir.
+- Arka plan toplayıcısı için GitHub Actions DATABASE_URL ve FIVE_DOLLAR_FOOTBALL_API_KEY sırları zorunludur. Sırlar eksikse iş artık yanlış biçimde başarılı görünmek yerine başarısız olur.
+- Ücretsiz 5DollarFootballAPI planı tüm dünya liglerini garanti etmez; sağlayıcının resmi dokümantasyonuna göre ücretsiz kapsam ilk 5 ligle sınırlıdır. API anahtarı ve kalıcı veritabanı olmadan gerçek canlı veri toplama doğrulanmış sayılmaz.
