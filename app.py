@@ -2883,20 +2883,22 @@ def show_matches(matches, prefix):
                             selected_id = (selected_alternative.get("fixture") or {}).get("id")
                             if selected_source in ("5DollarFootballAPI", "Sportmonks", "APIFootball.com", "API-Football", "TheSportsDB"):
                                 selected_capabilities = {
-                                    "5DollarFootballAPI": ("stats", "odds"),
+                                    "5DollarFootballAPI": ("stats", "odds", "events"),
                                     "Sportmonks": ("stats", "lineup", "odds"),
                                     "APIFootball.com": ("stats", "lineup", "odds", "players"),
                                     "API-Football": ("stats", "lineup", "odds", "players"),
                                     "TheSportsDB": ("stats", "lineup"),
                                 }.get(selected_source, ())
-                                actions = st.columns(4)
+                                actions = st.columns(5)
                                 if "stats" in selected_capabilities and actions[0].button("Eşleşen maç: istatistik", key=f"{prefix}_cross_stats_{fid}"):
                                     st.session_state[f"cross_stats_{fid}"] = True
                                 if "lineup" in selected_capabilities and actions[1].button("Eşleşen maç: kadro", key=f"{prefix}_cross_lineup_{fid}"):
                                     st.session_state[f"cross_lineup_{fid}"] = True
                                 if "odds" in selected_capabilities and actions[2].button("Eşleşen maç: oran", key=f"{prefix}_cross_odds_{fid}"):
                                     st.session_state[f"cross_odds_{fid}"] = True
-                                if {"stats", "odds"}.issubset(selected_capabilities) and actions[3].button("Eşleşen maçı analiz et", key=f"{prefix}_cross_analyze_{fid}"):
+                                if "events" in selected_capabilities and actions[3].button("Eşleşen maç: korner/kart", key=f"{prefix}_cross_events_{fid}"):
+                                    st.session_state[f"cross_events_{fid}"] = True
+                                if {"stats", "odds"}.issubset(selected_capabilities) and actions[4].button("Eşleşen maçı analiz et", key=f"{prefix}_cross_analyze_{fid}"):
                                     st.session_state[f"cross_analyze_{fid}"] = True
                                 if st.session_state.get(f"cross_stats_{fid}"):
                                     show_stats(selected_id, selected_alternative)
@@ -2904,6 +2906,8 @@ def show_matches(matches, prefix):
                                     show_lineups(selected_id, selected_alternative)
                                 if st.session_state.get(f"cross_odds_{fid}"):
                                     show_odds(selected_id, selected_alternative)
+                                if st.session_state.get(f"cross_events_{fid}") and selected_source == "5DollarFootballAPI":
+                                    show_five_dollar_events(selected_id, selected_alternative)
                                 if st.session_state.get(f"cross_analyze_{fid}"):
                                     cross_stats = show_stats(selected_id, selected_alternative)
                                     cross_odds = show_odds(selected_id, selected_alternative)
