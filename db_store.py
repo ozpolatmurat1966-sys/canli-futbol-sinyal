@@ -35,6 +35,10 @@ SCHEMA = [
     """CREATE TABLE IF NOT EXISTS alerts_sent (
         alert_key TEXT PRIMARY KEY, fixture_key TEXT, sent_at TEXT, message TEXT
     )""",
+    """CREATE TABLE IF NOT EXISTS alerts_pending (
+        alert_key TEXT PRIMARY KEY, fixture_key TEXT, created_at TEXT, message TEXT,
+        attempts INTEGER DEFAULT 0, last_error TEXT
+    )""",
     """CREATE TABLE IF NOT EXISTS paper_bets (
         id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_key TEXT, market TEXT, selection TEXT,
         odds REAL, model_probability REAL, stake REAL, placed_at TEXT,
