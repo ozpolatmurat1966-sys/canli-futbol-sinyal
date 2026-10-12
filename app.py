@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 
 import os
 import json
-from signal_engine import build_trend_rows, summarize_odds_movements, format_telegram_message
+from signal_engine import build_trend_rows, build_pressure_rows, summarize_odds_movements, format_telegram_message
 from model_engine import calibrate_probability, evaluate_calibration
 from player_props import extract_player_prop_rows
 from advanced_features import render_advanced_features
@@ -3979,6 +3979,7 @@ with signals_tab:
             ORDER BY last_seen DESC LIMIT 250
         """).fetchall()
         trend_rows = []
+        pressure_rows = []
         for fixture in live_rows:
             snaps = conn.execute(
                 "SELECT * FROM snapshots WHERE fixture_key=? ORDER BY observed_at DESC LIMIT 40",
@@ -3986,7 +3987,10 @@ with signals_tab:
             ).fetchall()
             if len(snaps) < 2:
                 continue
-            trend_rows.extend(build_trend_rows(dict(fixture), [dict(x) for x in snaps]))
+            fixture_dict = dict(fixture)
+            snapshot_dicts = [dict(x) for x in snaps]
+            trend_rows.extend(build_trend_rows(fixture_dict, snapshot_dicts))
+            pressure_rows.extend(build_pressure_rows(fixture_dict, snapshot_dicts))
         conn.close()
         if trend_rows:
             st.markdown("### Son 5 / 10 / 15 dakikalık değişim")
@@ -3994,6 +3998,13 @@ with signals_tab:
             st.caption("Karşılaştırma, istenen zaman penceresinden önceki en yakın kayıt ile son kaydı kullanır. Yeterli geçmiş gözlemi yoksa o pencere gösterilmez; dakika alanı yerine kayıt zamanları esas alınır.")
         else:
             st.info("Henüz trend hesaplamak için yeterli aralıklı anlık kayıt yok. Canlı maçları yenile; ilk kayıtlar biriktikçe bu tablo oluşur.")
+        if pressure_rows:
+            st.markdown("### Canlı baskı göstergesi (gözlenen istatistiklerden)")
+            st.dataframe(pressure_rows, use_container_width=True, hide_index=True)
+            st.caption("Gösterge, kayıtlı şut/korner/tehlikeli atak artışını ağırlıklandırır. Gol olasılığı veya bahis tavsiyesi değildir; sağlayıcı istatistiği eksikse taraf karşılaştırması yapılmaz.")
+        else:
+            st.info("Baskı göstergesi için aynı maçta zaman aralıklı şut/korner/tehlikeli atak istatistikleri henüz yok.")
+
         st.markdown("### Kaydedilmiş oran hareketleri")
         # Use the same history query as the performance tab; do not infer missing odds.
         fixtures, snap_count, odds_count, preds, leagues, movements = history_load_summary()
