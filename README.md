@@ -103,3 +103,19 @@ Bağımsız toplayıcı canlı maçlara ek olarak yaklaşık saatte bir İstanbu
 
 - Geçmiş aynı-lig sonuçları yeterli olduğunda deneysel Poisson tabanlı 1X2, gol üst ve karşılıklı gol olasılıkları gösterilir; geçmiş köşe/kart verisi yeterliyse bu pazarlar da yaklaşık hesaplanır. Bu baseline henüz doğrulanmış bir bahis modeli değildir ve verisi yetersiz maçlarda tahmin üretmez.
 - Deneysel model tahminleri, uygun yaklaşan maçlarda veritabanına bir kez kaydedilir; maç sonucu geldikten sonra 1X2/gol ve mevcutsa korner/kart hedefleri otomatik sonuçlandırılır. Pazar bazlı Brier skoru bu sonuçlardan hesaplanır; örneklem yetersizse model doğrulanmış kabul edilmez.
+
+
+## Zorunlu son kurulum (kod değil, hesap ayarı)
+Canlı veri toplama ve geçmiş doğrulama için aşağıdaki ayarlar kullanıcı hesabında yapılmalıdır; anahtarlar GitHub koduna yazılmamalıdır.
+
+1. 5DollarFootballAPI hesabından API anahtarını al: https://5dollarfootballapi.com/docs
+2. Kalıcı PostgreSQL veritabanı oluştur (ör. Neon Free) ve konsoldaki **Connect** alanından bağlantı dizesini kopyala. Neon bağlantı dizesi standart `postgresql://...` biçimindedir.
+3. Streamlit uygulamasının **Settings → Secrets** bölümüne şu değerleri ekle:
+   - `FIVE_DOLLAR_FOOTBALL_API_KEY`
+   - `DATABASE_URL`
+   - `APP_PASSWORD` (uygulamaya yalnızca senin girebilmen için güçlü bir parola)
+   - İsteğe bağlı: `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID`
+4. GitHub deposunda **Settings → Secrets and variables → Actions → New repository secret** yoluyla aynı `FIVE_DOLLAR_FOOTBALL_API_KEY` ve aynı `DATABASE_URL` değerlerini ekle. Otomatik Telegram uyarıları isteniyorsa Telegram değerlerini de ekle.
+5. GitHub **Actions** bölümünde **Background football collector** işinin çalışmasını kontrol et. Eksik sırlar varsa iş artık başarısız görünür; doğru değerler girildiğinde bağlantı testi ve veritabanı heartbeat'i doğrulanmalıdır.
+
+Ücretsiz Neon planı veritabanı için kullanılabilir; güncel sınırlar Neon'un planına tabidir. Bu veritabanı yalnızca kayıt altyapısıdır, yeni futbol verisi sağlamaz. Ücretsiz futbol API planı da tüm ligleri kapsamaz. Anahtar ve veritabanı sırlarını sohbet mesajına göndermeyin.
