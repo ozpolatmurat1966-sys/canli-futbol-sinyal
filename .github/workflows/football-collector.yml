@@ -30,7 +30,7 @@ jobs:
           COLLECTOR_ODDS_EVERY: "6"
         run: |
           if [ -z "$DATABASE_URL" ] || [ -z "$FIVE_DOLLAR_FOOTBALL_API_KEY" ]; then
-            echo "::notice::Add DATABASE_URL and FIVE_DOLLAR_FOOTBALL_API_KEY in repository Actions secrets."
-            exit 0
+            echo "::error::Collector cannot run: add DATABASE_URL and FIVE_DOLLAR_FOOTBALL_API_KEY in repository Actions secrets."
+            exit 1
           fi
           python background_collector.py --once
