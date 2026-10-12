@@ -42,3 +42,24 @@ streamlit run app.py
 - Lig/kaynak kapsam tablosu uygulamanın gözlemlediği ligleri listeler; bütün dünyadaki liglerin tarandığı anlamına gelmez.
 - Oyuncu bahis pazarları yalnızca veri sağlayıcısı oran döndürürse gösterilebilir; oyuncu prop piyasalarının eksiksiz kapsaması garanti edilmez.
 - Deneysel 10 dakikalık sinyaller kalibre edilmiş tahmin modeli değildir. Geçmiş performans metrikleri yalnızca sonuçla eşleştirilebilen kayıtlar için hesaplanır.
+
+
+## Bağımsız veri toplama ve kalıcı veritabanı
+Bu proje artık Streamlit oturumundan bağımsız bir toplayıcı içerir:
+- `background_collector.py` sürekli worker olarak `python background_collector.py` ile çalıştırılabilir.
+- `.github/workflows/football-collector.yml` GitHub Actions üzerinden yaklaşık 5 dakikada bir tek toplama turu çalıştırmayı dener. Zamanlanmış işler GitHub tarafından geciktirilebilir; gerçek zamanlılık garantisi değildir.
+- Kalıcı ortak geçmiş için bir PostgreSQL veritabanı oluştur ve aynı `DATABASE_URL` bağlantı adresini Streamlit Secrets'e ve GitHub deposunun **Settings → Secrets and variables → Actions** bölümüne ekle.
+- Aynı bölüme `FIVE_DOLLAR_FOOTBALL_API_KEY` secret'ını da ekle. Secret eklenmezse zamanlanmış collector güvenli biçimde veri toplama adımını atlar.
+- Streamlit Secrets örneği: `DATABASE_URL = "postgresql://..."` ve `FIVE_DOLLAR_FOOTBALL_API_KEY = "..."`. Gerçek değerleri kaynak koda veya README'ye yazma.
+- Toplayıcı ilk etapta 5DollarFootballAPI kaynağını kullanır. Kaynak anahtarı/ücretsiz plan kapsamı, API kotası ve oran endpoint'i izinleri hâlâ geçerlidir. Lig veya oyuncu pazarı kaynakta yoksa başka bir kaynaktan varmış gibi üretilmez.
+- Zamanlanmış iş sınırlı sayıda canlı maça bakar; varsayılan iş akışı en fazla 8 maç işler, istatistikleri her ikinci turda ve oranları her altıncı turda sorgular. Kota/masrafı izleyerek bu değerleri değiştir.
+
+## Tarihsel kalibrasyon
+- Geçmişte sonucu değerlendirilebilen 10 dakikalık deneysel tahminler yeterli sayıya ulaştığında benzer geçmiş olasılıkların gerçekleşme oranından düzeltilmiş olasılık üretilebilir.
+- En az 50 değerlendirilmiş örnek olmadan kalibre edilmiş yüzde gösterilmez.
+- Geçmiş / performans sekmesi kronolojik eğitim/test ayrımıyla ham ve kalibre Brier skorlarını karşılaştırır. Bu ölçüm küçük/yanlı örneklemden etkilenebilir ve gelecekteki kârlılığı kanıtlamaz.
+- Kalibrasyon şu anda yalnızca mevcut deneysel **sonraki 10 dakika gol/korner** tahminleri içindir; maç sonucu veya oyuncu prop pazarları için kalibre edilmiş model anlamına gelmez.
+
+## Oyuncu bahis pazarları
+- Uygulama ve bağımsız toplayıcı, sağlayıcı yanıtında açıkça bulunan oyuncu şut/gol/asist/kart gibi pazarları tanımaya çalışır ve varsa oran geçmişine kaydeder.
+- Desteklenen pazar adları ve yanıt şemaları sağlayıcıya göre değişir. Oyuncu istatistiği bulunması, o oyuncu için bahis oranı bulunduğu anlamına gelmez.
