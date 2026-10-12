@@ -988,7 +988,7 @@ def normalize_5dollar_fixture(item):
 
     if status_lower in ("half", "ht", "half_time", "halftime", "break", "interval"):
         short = "HT"
-    elif status_lower in ("finished", "full_time", "ft", "after_extra_time", "after_penalties", "completed"):
+    elif status_lower in ("finished", "full", "full_time", "ft", "after_extra_time", "after_penalties", "completed"):
         short = "FT"
     elif status_lower in ("scheduled", "not_started", "ns", "upcoming", "fixture", "pre_match"):
         short = "NS"
@@ -2141,7 +2141,7 @@ def show_odds(fixture_id, match=None):
             odd = num(price)
             if odd is None or odd <= 1:
                 return
-            label = f"{market} ({line})" if line is not None and market in ("Gol Alt/Üst", "Korner Alt/Üst", "Kart Alt/Üst", "Asya Handikap") else market
+            label = f"{market} ({line})" if line is not None and ("Alt/Üst" in market or "Handikap" in market) else market
             rows.append({"Pazar": label, "Seçenek": option, "Oran": odd,
                          "Oran aşaması": stage, "Oranın ham olasılığı (%)": round(100 / odd, 1),
                          "_odd": odd, "_market": label, "_option": option, "_bookmaker": bookmaker})
