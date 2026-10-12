@@ -3697,7 +3697,7 @@ with source_tab:
         {"Veri türü": "Son maçlar / form", "Bağlı kaynaklar": "ESPN takım son maçları; football-data.org sonuçları", "Sınır": "ESPN yalnızca seçili lig kodlarında sorgulanıyor; formun tüm liglerde otomatik hesaplanması henüz yok."},
         {"Veri türü": "Maç istatistikleri", "Bağlı kaynaklar": "5DollarFootballAPI (anahtar; canlı atak/şut/topa sahip olma), Sportmonks, APIFootball.com; TheSportsDB maç istatistikleri", "Sınır": "5Dollar ücretsiz planda ilk 5 lig; TheSportsDB yalnızca etkinlikte kayıtlı alanları verir."},
         {"Veri türü": "İlk 11 / kadro", "Bağlı kaynaklar": "Sportmonks, APIFootball.com; TheSportsDB maç kadrosu", "Sınır": "Kadro yayınlanmamışsa veya kaynakta yoksa gösterilemez."},
-        {"Veri türü": "Oyuncu maç istatistikleri", "Bağlı kaynaklar": "APIFootball.com; eski API-Football yolu devre dışı", "Sınır": "TheSportsDB kadro/oyuncu profili, oyuncu başına canlı maç istatistiği yerine geçmez."},
+        {"Veri türü": "Oyuncu maç istatistikleri ve bahis pazarları", "Bağlı kaynaklar": "APIFootball.com oyuncu istatistiği; sağlayıcı oran yanıtında varsa genel oyuncu prop ayrıştırıcısı", "Sınır": "Oyuncu bahis oranları sağlayıcıya göre değişir; her maç/lig için garanti edilmez. İstatistik oran yerine geçmez."},
         {"Veri türü": "Bahis oranları", "Bağlı kaynaklar": "5DollarFootballAPI (anahtar; ücretsiz planda Bet365 ve ilk 5 lig), Sportmonks canlı oran uç noktası (paket erişimine bağlı), APIFootball.com", "Sınır": "5Dollar oranları için sağlayıcıda o maç/lig oranı bulunmalı; OpenFootAPI, ESPN, OpenLigaDB, football-data.org ücretsiz kapsamı ve TheSportsDB oran kaynağı değil."},
         {"Veri türü": "Haber", "Bağlı kaynaklar": "Google Haberler RSS", "Sınır": "Başlık eşleşmesi; haber doğrulama veya sosyal medya duygu analizi değil."},
     ]
@@ -3825,7 +3825,7 @@ with analytics_tab:
 
 with history_tab:
     st.subheader("📚 Geçmiş veriler, oran hareketleri ve model performansı")
-    st.caption("Uygulama fikstürleri, gözlenen skorları, istenen istatistikleri, oran kayıtlarını ve deneysel tahminleri yerel SQLite veritabanına kaydeder. Geçmiş veri oluşmadan başarı ölçümü yapılamaz.")
+    st.caption("Uygulama fikstürleri, gözlenen skorları, istenen istatistikleri, oran kayıtlarını ve deneysel tahminleri DATABASE_URL ayarlıysa PostgreSQL’e, değilse yerel SQLite’a kaydeder. Geçmiş veri oluşmadan başarı ölçümü yapılamaz.")
     try:
         history_fixtures, history_snapshot_count, history_odds_count, history_predictions, history_leagues, history_movements = history_load_summary()
         evaluated = [p for p in history_predictions if p["evaluated_result"] is not None]
