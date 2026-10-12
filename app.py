@@ -2822,13 +2822,14 @@ def show_matches(matches, prefix):
                 "Sportmonks": {"stats", "lineup", "odds"},
                 "APIFootball.com": {"stats", "lineup", "odds", "players"},
                 "TheSportsDB": {"stats", "lineup"},
-                "5DollarFootballAPI": {"stats", "odds"},
+                "5DollarFootballAPI": {"stats", "odds", "events"},
                 "API-Football": {"stats", "lineup", "odds", "players"} if API_KEY else set(),
             }.get(source_name, set())
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
             # Render only actions that this source actually supports; form is a separate ESPN lookup.
             for capability, state_key in (("stats", f"stats_{fid}"), ("lineup", f"lineup_{fid}"),
-                                           ("odds", f"odds_{fid}"), ("players", f"players_{fid}")):
+                                           ("odds", f"odds_{fid}"), ("players", f"players_{fid}"),
+                                           ("events", f"events_{fid}")):
                 if capability not in capabilities:
                     st.session_state.pop(state_key, None)
             if "stats" in capabilities and c1.button("İstatistikleri getir", key=f"{prefix}_stats_{fid}"):
@@ -2837,13 +2838,15 @@ def show_matches(matches, prefix):
                 st.session_state[f"lineup_{fid}"] = True
             if "odds" in capabilities and c3.button("Oranları getir", key=f"{prefix}_odds_{fid}"):
                 st.session_state[f"odds_{fid}"] = True
-            if {"stats", "odds"}.issubset(capabilities) and c4.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
+            if "events" in capabilities and c4.button("Korner / kart / olaylar", key=f"{prefix}_events_{fid}"):
+                st.session_state[f"events_{fid}"] = True
+            if {"stats", "odds"}.issubset(capabilities) and c5.button("Maçı analiz et", key=f"{prefix}_analyze_{fid}"):
                 st.session_state[f"stats_{fid}"] = True
                 st.session_state[f"odds_{fid}"] = True
                 st.session_state[f"analyze_{fid}"] = True
-            if "players" in capabilities and c5.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
+            if "players" in capabilities and c6.button("Oyuncu istatistikleri", key=f"{prefix}_players_{fid}"):
                 st.session_state[f"players_{fid}"] = True
-            if c6.button("Takım formu", key=f"{prefix}_form_{fid}"):
+            if c7.button("Takım formu", key=f"{prefix}_form_{fid}"):
                 st.session_state[f"form_{fid}"] = True
             if is_openfootapi:
                 if st.button("🔎 Maçı diğer kaynaklarda ara", key=f"{prefix}_cross_source_{fid}"):
@@ -2946,6 +2949,8 @@ def show_matches(matches, prefix):
                 show_player_statistics(fid, match)
             if st.session_state.get(f"stats_{fid}"):
                 stats = show_stats(fid, match)
+            if st.session_state.get(f"events_{fid}") and source_name == "5DollarFootballAPI":
+                show_five_dollar_events(fid, match)
             if st.session_state.get(f"lineup_{fid}"):
                 show_lineups(fid, match)
             if st.session_state.get(f"odds_{fid}"):
