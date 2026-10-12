@@ -11,6 +11,7 @@ from urllib.parse import quote_plus
 
 import os
 import json
+from signal_engine import build_trend_rows, summarize_odds_movements, format_telegram_message
 
 def history_db_connect():
     """Local SQLite store; configure FOOTBALL_HISTORY_DB_PATH for a persistent mounted path."""
@@ -3267,7 +3268,7 @@ def show_matches(matches, prefix):
                 history_store_odds(match, odds)
                 analyze_match(match, stats, odds)
 
-live_tab, date_tab, source_tab, analytics_tab, history_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🛰️ Kaynak durumu", "📈 Takım / oyuncu analizi", "📚 Geçmiş / performans", "ℹ️ Program hakkında"])
+live_tab, date_tab, source_tab, analytics_tab, history_tab, signals_tab, info_tab = st.tabs(["🔴 Canlı maçlar", "📅 Tarihe göre maçlar", "🛰️ Kaynak durumu", "📈 Takım / oyuncu analizi", "📚 Geçmiş / performans", "📡 Canlı sinyaller", "ℹ️ Program hakkında"])
 with live_tab:
     st.subheader("Şu anda oynanan maçlar")
     auto_refresh = st.checkbox("Canlı maçları otomatik yenile (30 saniye)", value=False, key="live_auto_refresh")
@@ -3893,6 +3894,97 @@ with history_tab:
     except Exception as history_error:
         st.error(f"Geçmiş/performans veritabanı açılamadı: {history_error}")
         st.info("Varsayılan dosya yoluna yazma izni olmayabilir. FOOTBALL_HISTORY_DB_PATH ortam değişkenini yazılabilir kalıcı dizine ayarla.")
+
+with signals_tab:
+    st.subheader("📡 Canlı trendler, oran hareketleri ve uyarılar")
+    st.caption("Bu ekran yalnızca uygulamanın daha önce kaydettiği gözlemleri kullanır. Tarayıcı açıkken canlı maç yenilemesini etkin tut; veri sağlayıcısı ve ücretsiz kota sınırları geçerlidir.")
+    try:
+        conn = history_db_connect()
+        live_rows = conn.execute("""
+            SELECT * FROM fixtures
+            WHERE finished=0
+            ORDER BY last_seen DESC LIMIT 250
+        """).fetchall()
+        trend_rows = []
+        for fixture in live_rows:
+            snaps = conn.execute(
+                "SELECT * FROM snapshots WHERE fixture_key=? ORDER BY observed_at DESC LIMIT 40",
+                (fixture["fixture_key"],)
+            ).fetchall()
+            if len(snaps) < 2:
+                continue
+            trend_rows.extend(build_trend_rows(dict(fixture), [dict(x) for x in snaps]))
+        conn.close()
+        if trend_rows:
+            st.markdown("### Son 5 / 10 / 15 dakikalık değişim")
+            st.dataframe(trend_rows, use_container_width=True, hide_index=True)
+            st.caption("Karşılaştırma, istenen zaman penceresinden önceki en yakın kayıt ile son kaydı kullanır. Yeterli geçmiş gözlemi yoksa o pencere gösterilmez; dakika alanı yerine kayıt zamanları esas alınır.")
+        else:
+            st.info("Henüz trend hesaplamak için yeterli aralıklı anlık kayıt yok. Canlı maçları yenile; ilk kayıtlar biriktikçe bu tablo oluşur.")
+        st.markdown("### Kaydedilmiş oran hareketleri")
+        movement_rows = summarize_odds_movements(conn=None)
+        # Use the same history query as the performance tab; do not infer missing odds.
+        fixtures, snap_count, odds_count, preds, leagues, movements = history_load_summary()
+        if movements:
+            st.dataframe([{
+                "Maç": f'{m["home"]} - {m["away"]}',
+                "Lig": m["league"], "Pazar": m["market"], "Seçenek": m["option_name"],
+                "Şirket": m["bookmaker"], "Önceki oran": m["previous_odd"],
+                "Son oran": m["latest_odd"],
+                "Değişim": round(float(m["latest_odd"]) - float(m["previous_odd"]), 3),
+                "Son gözlem (UTC)": m["observed_at"]
+            } for m in movements[:50]], use_container_width=True, hide_index=True)
+        else:
+            st.info("Aynı pazar/şirket için farklı zamanlarda en az iki oran gözlemi henüz yok.")
+        st.markdown("### Telegram uyarıları (isteğe bağlı)")
+        tg_token = str(secret("TELEGRAM_BOT_TOKEN", "")).strip()
+        tg_chat = str(secret("TELEGRAM_CHAT_ID", "")).strip()
+        if not tg_token or not tg_chat:
+            st.info("Telegram bildirimi için Streamlit Secrets bölümüne TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID ekle. Bu alanlar eklenmeden mesaj gönderilmez.")
+        if st.button("Son sinyalleri Telegram'a gönder", disabled=not (tg_token and tg_chat), key="send_telegram_signals"):
+            signal_lines = []
+            for row in trend_rows[:15]:
+                if row.get("Gol değişimi") not in (None, 0) or row.get("Korner değişimi") not in (None, 0):
+                    signal_lines.append(
+                        f'{row["Maç"]} · {row["Pencere"]}: gol {row["Gol değişimi"]}, korner {row["Korner değişimi"]}'
+                    )
+            for m in movements[:10]:
+                try:
+                    delta = float(m["latest_odd"]) - float(m["previous_odd"])
+                except (TypeError, ValueError):
+                    continue
+                if abs(delta) >= 0.15:
+                    signal_lines.append(
+                        f'{m["home"]} - {m["away"]} · {m["market"]}/{m["option_name"]}: '
+                        f'{m["previous_odd"]} → {m["latest_odd"]} ({delta:+.2f})'
+                    )
+            if not signal_lines:
+                st.warning("Gönderilecek belirgin skor/korner veya oran hareketi bulunamadı.")
+            else:
+                message = format_telegram_message(signal_lines[:20])
+                try:
+                    resp = requests.post(
+                        f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                        json={"chat_id": tg_chat, "text": message, "disable_web_page_preview": True},
+                        timeout=12
+                    )
+                    if resp.ok and (resp.json() or {}).get("ok"):
+                        st.success(f"Telegram'a {min(len(signal_lines), 20)} sinyal gönderildi.")
+                    else:
+                        st.error(f"Telegram mesajı gönderilemedi (HTTP {resp.status_code}). Bot tokenı ve chat ID'yi kontrol et.")
+                except requests.RequestException as e:
+                    st.error(f"Telegram bağlantı hatası: {str(e)[:180]}")
+        st.markdown("### Lig / kaynak kapsamı taraması")
+        if leagues:
+            st.dataframe([{
+                "Kaynak": l["source"], "Lig": l["league"], "Kaydedilen maç": l["fixtures"],
+                "Tamamlanan maç": l["finished"]
+            } for l in leagues], use_container_width=True, hide_index=True)
+            st.caption("Bu liste sağlayıcıların tüm dünya liglerini değil, uygulamanın bugüne kadar gördüğü ve kaydettiği ligleri gösterir.")
+        else:
+            st.info("Kapsam taraması için önce canlı maç veya tarih fikstürü yüklenmeli.")
+    except Exception as signal_error:
+        st.error(f"Canlı sinyal ekranı açılamadı: {signal_error}")
 
 with info_tab:
     st.subheader("Program hakkında")
