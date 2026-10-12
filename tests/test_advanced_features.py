@@ -30,8 +30,8 @@ class DecisionEngineTests(unittest.TestCase):
 class BacktestTests(unittest.TestCase):
     def test_roi_and_drawdown_are_calculated_from_settled_bets(self):
         rows = [
-            {"odds": 2.0, "stake": 10, "settled_result": 1},
-            {"odds": 3.0, "stake": 10, "settled_result": 0},
+            {"odds": 2.0, "stake": 10, "settled_result": 1, "model_probability": 0.8},
+            {"odds": 3.0, "stake": 10, "settled_result": 0, "model_probability": 0.2},
         ]
         result = evaluate_paper_bets(rows)
         self.assertTrue(result["ready"])
@@ -39,6 +39,8 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(result["profit"], 0)
         self.assertEqual(result["roi"], 0)
         self.assertEqual(result["max_drawdown"], 10)
+        self.assertEqual(result["brier_samples"], 2)
+        self.assertAlmostEqual(result["brier_score"], 0.04)
 
     def test_no_settled_bets_means_no_roi(self):
         result = evaluate_paper_bets([{"odds": 2.0, "stake": 10, "settled_result": None}])
