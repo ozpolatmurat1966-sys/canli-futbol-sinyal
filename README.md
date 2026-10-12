@@ -102,3 +102,4 @@ Bağımsız toplayıcı canlı maçlara ek olarak yaklaşık saatte bir İstanbu
 - Ücretsiz 5DollarFootballAPI planı tüm dünya liglerini garanti etmez; sağlayıcının resmi dokümantasyonuna göre ücretsiz kapsam ilk 5 ligle sınırlıdır. API anahtarı ve kalıcı veritabanı olmadan gerçek canlı veri toplama doğrulanmış sayılmaz.
 
 - Geçmiş aynı-lig sonuçları yeterli olduğunda deneysel Poisson tabanlı 1X2, gol üst ve karşılıklı gol olasılıkları gösterilir; geçmiş köşe/kart verisi yeterliyse bu pazarlar da yaklaşık hesaplanır. Bu baseline henüz doğrulanmış bir bahis modeli değildir ve verisi yetersiz maçlarda tahmin üretmez.
+- Deneysel model tahminleri, uygun yaklaşan maçlarda veritabanına bir kez kaydedilir; maç sonucu geldikten sonra 1X2/gol ve mevcutsa korner/kart hedefleri otomatik sonuçlandırılır. Pazar bazlı Brier skoru bu sonuçlardan hesaplanır; örneklem yetersizse model doğrulanmış kabul edilmez.
