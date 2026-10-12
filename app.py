@@ -3922,7 +3922,6 @@ with signals_tab:
         else:
             st.info("Henüz trend hesaplamak için yeterli aralıklı anlık kayıt yok. Canlı maçları yenile; ilk kayıtlar biriktikçe bu tablo oluşur.")
         st.markdown("### Kaydedilmiş oran hareketleri")
-        movement_rows = summarize_odds_movements(conn=None)
         # Use the same history query as the performance tab; do not infer missing odds.
         fixtures, snap_count, odds_count, preds, leagues, movements = history_load_summary()
         if movements:
