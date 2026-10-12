@@ -2757,6 +2757,7 @@ def analyze_match(match, stats, odds_rows):
 
     # Compare providers and explain evidence quality without presenting an unvalidated bet as a prediction.
     show_odds_comparison(odds_rows)
+    show_market_probability_analysis(odds_rows)
     valid_odds = [r for r in odds_rows if r.get("_odd") and r["_odd"] > 1]
     if valid_odds:
         # Group markets into understandable families and keep correct-score/long-shot
@@ -2962,6 +2963,65 @@ def show_match_news(home_name, away_name, fixture_id):
     if summary.get("counts") and summary["counts"].get("Olağandışı/inceleme haberi"):
         st.warning("Bazı başlıklarda soruşturma/şike anahtar sözcükleri var. Bu bir iddia veya kanıt değildir; kaynak doğrulaması gerekir.")
     st.caption("Özet yalnızca RSS başlıklarına dayalı anahtar-sözcük sınıflandırmasıdır; tam haber metni ve sosyal medya duygu analizi değildir.")
+
+def show_market_probability_analysis(odds_rows):
+    """Remove bookmaker overround within comparable outcome groups; this is market-implied, not model probability."""
+    st.markdown("### ⚖️ Piyasa olasılığı ve marj analizi")
+    st.caption("Oranlardan türetilen piyasa olasılığıdır; model tahmini değildir. Aynı pazar/şirket içindeki karşılıklı seçenekler normalize edilerek marj yaklaşık çıkarılır.")
+    groups = {}
+    for row in (odds_rows or []):
+        try:
+            odd = float(row.get("_odd") or row.get("Oran"))
+        except (TypeError, ValueError):
+            continue
+        if odd <= 1: continue
+        market = str(row.get("_market") or row.get("Pazar") or "")
+        option = str(row.get("_option") or row.get("Seçenek") or "")
+        bookmaker = str(row.get("_bookmaker") or row.get("Sağlayıcı") or "—")
+        stage = str(row.get("Oran aşaması") or row.get("stage") or "—")
+        low_market, low_option = market.lower(), option.lower()
+        if any(x in low_market for x in ("maç sonucu", "match winner", "1x2")):
+            family = "Maç sonucu 1X2"
+            if any(x in low_option for x in ("ev sahibi", "home", "(1)")): outcome = "Ev sahibi"
+            elif any(x in low_option for x in ("beraberlik", "draw", "(x)")): outcome = "Beraberlik"
+            elif any(x in low_option for x in ("deplasman", "away", "(2)")): outcome = "Deplasman"
+            else: continue
+        elif any(x in low_market for x in ("alt/üst", "over/under", "gol alt", "korner", "kart")):
+            if any(x in low_option for x in ("üst", "over")): outcome = "Üst"
+            elif any(x in low_option for x in ("alt", "under")): outcome = "Alt"
+            else: continue
+            family = market
+        elif any(x in low_market for x in ("karşılıklı gol", "both teams score")):
+            if any(x in low_option for x in ("evet", "yes")): outcome = "Evet"
+            elif any(x in low_option for x in ("hayır", "no")): outcome = "Hayır"
+            else: continue
+            family = market
+        else:
+            continue
+        key = (bookmaker, stage, family)
+        groups.setdefault(key, {})[outcome] = odd
+    result_rows = []
+    for (bookmaker, stage, family), outcomes in groups.items():
+        if len(outcomes) < 2: continue
+        raw = {name: 1.0 / odd for name, odd in outcomes.items()}
+        total = sum(raw.values())
+        if total <= 0: continue
+        overround = (total - 1.0) * 100
+        for name, odd in outcomes.items():
+            fair_probability = raw[name] / total
+            result_rows.append({
+                "Pazar": family, "Seçenek": name, "Şirket": bookmaker, "Oran aşaması": stage,
+                "Oran": odd, "Ham olasılık (%)": round(raw[name] * 100, 2),
+                "Marjdan arındırılmış piyasa olasılığı (%)": round(fair_probability * 100, 2),
+                "Marjsız teorik oran": round(1.0 / fair_probability, 3),
+                "Pazar marjı yaklaşık (%)": round(overround, 2)
+            })
+    if result_rows:
+        st.dataframe(result_rows, use_container_width=True, hide_index=True)
+        st.caption("Pazar marjı hesabı yalnızca aynı grupta görünen karşılıklı seçeneklerle yapılır. Eksik seçenek veya farklı çizgi varsa sonuç karşılaştırılabilir olmayabilir.")
+    else:
+        st.info("Marj analizi için aynı pazar ve sağlayıcıdan en az iki karşılıklı seçenekli oran gerekli.")
+    st.warning("Gerçek değer bahsi kararı henüz etkin değil: bunun için aynı bahis pazarına/çizgisine ait geçmişte kalibre edilmiş model olasılığı gerekir. Deneysel 10 dakikalık tahminleri maç sonucu veya gol çizgisi olasılığı gibi kullanmıyoruz.")
 
 def show_bet_candidates(stats, odds_rows, elapsed=None):
     """Rank available odds using transparent descriptive signals; never fabricate calibrated probabilities."""
