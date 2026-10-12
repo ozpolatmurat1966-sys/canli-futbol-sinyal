@@ -2853,6 +2853,28 @@ def analyze_match(match, stats, odds_rows):
     else:
         st.info("Oran verisi olmadığı için karşılaştırma yapılamadı.")
 
+    player_market_rows = []
+    for row in (odds_rows or []):
+        market_text = str(row.get("_market") or row.get("Pazar") or "")
+        option_text = str(row.get("_option") or row.get("Seçenek") or "")
+        searchable = (market_text + " " + option_text).lower()
+        if any(term in searchable for term in (
+            "player", "oyuncu", "goalscorer", "anytime scorer",
+            "player shots", "player assists", "player cards", "player fouls",
+            "to score", "shots on target player"
+        )):
+            player_market_rows.append(row)
+    st.markdown("### 👤 Oyuncu bahis pazarları")
+    if player_market_rows:
+        st.dataframe([{
+            "Pazar": row.get("_market") or row.get("Pazar"),
+            "Oyuncu / seçenek": row.get("_option") or row.get("Seçenek"),
+            "Oran": row.get("_odd") or row.get("Oran"),
+            "Sağlayıcı": row.get("_bookmaker") or row.get("Şirket") or "—"
+        } for row in player_market_rows], use_container_width=True, hide_index=True)
+    else:
+        st.info("Bağlı sağlayıcının bu maç için oran yanıtında oyuncu pazarı bulunmadı. Oyuncu istatistiği varsa ayrı gösterilir; istatistik tek başına bahis oranı değildir.")
+
     show_bet_candidates(stats, odds_rows, elapsed)
 
     # Show evidence for/against broad live-game tendencies; this is descriptive, not a probability model.
