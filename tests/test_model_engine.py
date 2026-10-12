@@ -59,6 +59,20 @@ class PlayerPropTests(unittest.TestCase):
         payload = {"market": "Match Winner", "selection": "Home", "odd": 1.8}
         self.assertEqual(extract_player_prop_rows(payload), [])
 
+    def test_detects_player_market_from_provider_key(self):
+        payload = {"bookmakers": [{
+            "name": "Book X",
+            "odds": {"player_shots": [{
+                "player": {"name": "Player Two"}, "selection": "Over 0.5",
+                "odd": 1.75, "stage": "inplay"
+            }]}
+        }]}
+        rows = extract_player_prop_rows(payload)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Oyuncu"], "Player Two")
+        self.assertIn("Player Shots", rows[0]["Pazar"])
+        self.assertEqual(rows[0]["Şirket"], "Book X")
+
 
 if __name__ == "__main__":
     unittest.main()
