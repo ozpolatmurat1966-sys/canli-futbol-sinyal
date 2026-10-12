@@ -27,6 +27,8 @@ def extract_player_prop_rows(payload):
                 merged[key] = value
         market = str(node.get("market") or node.get("market_name") or node.get("marketName") or
                      merged.get("market") or "")
+        if isinstance(node.get("odds"), (dict, list)) and node.get("name"):
+            merged["bookmaker"] = node.get("name")
         context_text = " ".join(str(merged.get(k, "")) for k in ("market", "market_name", "marketName", "name", "label")).lower()
         player = node.get("player_name") or node.get("playerName") or node.get("player")
         if isinstance(player, dict):
@@ -65,9 +67,15 @@ def extract_player_prop_rows(payload):
             next_context["market"] = market
         for key, value in node.items():
             if isinstance(value, (dict, list)):
-                if key.lower() in ("player", "player_name", "playername") and isinstance(value, dict):
-                    next_context["player"] = value.get("name") or value.get("display_name") or next_context.get("player")
-                walk(value, next_context)
+                child_context = dict(next_context)
+                key_lower = str(key).lower()
+                if key_lower in ("player", "player_name", "playername") and isinstance(value, dict):
+                    child_context["player"] = value.get("name") or value.get("display_name") or child_context.get("player")
+                elif any(term in key_lower for term in PLAYER_TERMS) or key_lower.startswith("player_"):
+                    child_context["market"] = market_names.get(key_lower, key_lower.replace("_", " ").title())
+                elif key_lower in ("opening", "closing", "inplay", "live"):
+                    child_context["stage"] = key_lower.title()
+                walk(value, child_context)
 
     walk(payload)
     return results
