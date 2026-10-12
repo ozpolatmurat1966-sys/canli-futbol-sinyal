@@ -483,6 +483,37 @@ def collect_historical_batch(conn):
             "page": page, "has_more": has_more, "next_cursor": next_cursor}
 
 
+def odds_movement_alert_lines(conn, key, min_abs_change=0.20, min_relative_change=0.12):
+    """Return only notable price changes observed at distinct polling timestamps."""
+    rows = conn.execute("""SELECT market, option_name, bookmaker, stage, line, odd, observed_at
+        FROM odds_history WHERE fixture_key=? AND odd > 1
+        ORDER BY observed_at DESC LIMIT 4000""", (key,)).fetchall()
+    grouped = {}
+    for row in rows:
+        group_key = (row["market"], row["option_name"], row["bookmaker"], row["stage"], row["line"])
+        grouped.setdefault(group_key, {})
+        grouped[group_key].setdefault(str(row["observed_at"]), float(row["odd"]))
+    alerts = []
+    for group_key, by_time in grouped.items():
+        ordered = sorted(by_time.items())
+        if len(ordered) < 2:
+            continue
+        (_, previous), (observed_at, latest) = ordered[-2], ordered[-1]
+        change = latest - previous
+        relative = change / previous
+        if abs(change) < min_abs_change and abs(relative) < min_relative_change:
+            continue
+        market, option_name, bookmaker, stage, line = group_key
+        label = f"{market or 'Pazar'} / {option_name or 'Seçim'}"
+        if line:
+            label += f" ({line})"
+        alerts.append(
+            f"Oran hareketi: {label} · {bookmaker or 'Şirket bilinmiyor'} · "
+            f"{previous:.2f} → {latest:.2f} ({change:+.2f}; {relative:+.1%})"
+        )
+    return alerts[:15]
+
+
 def run_once(conn, cycle):
     retry_pending_telegram_alerts(conn)
     collect_leagues_if_stale(conn)
@@ -513,6 +544,9 @@ def run_once(conn, cycle):
                 odds = request_json(f"/fixtures/{fixture_id}/odds")
                 count = save_odds(conn, key, odds)
                 log.info("Saved %s odds rows for fixture %s", count, fixture_id)
+                odds_changes = odds_movement_alert_lines(conn, key)
+                if odds_changes:
+                    send_telegram_alert(conn, key, match, odds_changes)
             except Exception as exc:
                 log.warning("Odds unavailable for fixture %s: %s", fixture_id, str(exc)[:180])
 
