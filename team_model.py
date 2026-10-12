@@ -37,7 +37,10 @@ def _pair(obj):
 
 def _team_cards(value):
     if isinstance(value, dict):
-        return (_number(value.get("yellow")) or 0.0) + (_number(value.get("red")) or 0.0)
+        yellow, red = _number(value.get("yellow")), _number(value.get("red"))
+        if yellow is None and red is None:
+            return None
+        return (yellow or 0.0) + (red or 0.0)
     return _number(value)
 
 
@@ -173,23 +176,25 @@ def estimate_fixture_markets(history_rows, home, away, league,
         {"market": "3,5 gol üst", "target": "over_3_5_goals", "probability": sum(total_goals[4:])},
         {"market": "Karşılıklı gol: Evet", "target": "btts_yes", "probability": p_btts},
     ]
-    corner_samples = [r["corners"] for r in home_rows + away_rows if r["corners"] is not None]
+    home_corner_values = [r["corners"] for r in home_rows if r["corners"] is not None]
+    away_corner_values = [r["corners"] for r in away_rows if r["corners"] is not None]
     league_corner_matches = [m for m in candidates if m["corners_home"] is not None and m["corners_away"] is not None]
-    if len(corner_samples) >= min_team_matches * 2 and len(league_corner_matches) >= min_league_matches:
+    if len(home_corner_values) >= min_team_matches and len(away_corner_values) >= min_team_matches and len(league_corner_matches) >= min_league_matches:
         league_corner_team = sum(m["corners_home"] + m["corners_away"] for m in league_corner_matches) / (2 * len(league_corner_matches))
-        home_corners = _smooth([r["corners"] for r in home_rows if r["corners"] is not None], league_corner_team)
-        away_corners = _smooth([r["corners"] for r in away_rows if r["corners"] is not None], league_corner_team)
+        home_corners = _smooth(home_corner_values, league_corner_team)
+        away_corners = _smooth(away_corner_values, league_corner_team)
         lambda_corners = home_corners + away_corners
         for line in (8.5, 9.5, 10.5):
             markets.append({"market": f"{line:.1f} korner üst", "target": f"over_{str(line).replace('.', '_')}_corners",
                             "probability": _over_probability(lambda_corners, line), "expected_total": lambda_corners,
                             "stat_samples": len(league_corner_matches)})
-    card_samples = [r["cards"] for r in home_rows + away_rows if r["cards"] is not None]
+    home_card_values = [r["cards"] for r in home_rows if r["cards"] is not None]
+    away_card_values = [r["cards"] for r in away_rows if r["cards"] is not None]
     league_card_matches = [m for m in candidates if m["cards_home"] is not None and m["cards_away"] is not None]
-    if len(card_samples) >= min_team_matches * 2 and len(league_card_matches) >= min_league_matches:
+    if len(home_card_values) >= min_team_matches and len(away_card_values) >= min_team_matches and len(league_card_matches) >= min_league_matches:
         league_card_team = sum(m["cards_home"] + m["cards_away"] for m in league_card_matches) / (2 * len(league_card_matches))
-        home_cards = _smooth([r["cards"] for r in home_rows if r["cards"] is not None], league_card_team)
-        away_cards = _smooth([r["cards"] for r in away_rows if r["cards"] is not None], league_card_team)
+        home_cards = _smooth(home_card_values, league_card_team)
+        away_cards = _smooth(away_card_values, league_card_team)
         lambda_cards = home_cards + away_cards
         for line in (3.5, 4.5, 5.5):
             markets.append({"market": f"{line:.1f} kart üst", "target": f"over_{str(line).replace('.', '_')}_cards",
