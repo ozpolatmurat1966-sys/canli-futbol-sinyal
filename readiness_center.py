@@ -76,7 +76,7 @@ def save_provider_checks(db_connect, checks):
 
 def _norm(value):
     value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
-    value = re.sub(r"\\b(fc|cf|sc|afc|club|the)\\b", "", value)
+    value = re.sub(r"\b(fc|cf|sc|afc|club|the)\b", "", value)
     return re.sub(r"[^a-z0-9]", "", value)
 
 
