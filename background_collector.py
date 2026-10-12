@@ -1,4 +1,5 @@
 """Independent polling worker. Run as a separate background service, not inside Streamlit."""
+import argparse
 import json
 import logging
 import os
@@ -167,7 +168,7 @@ def save_snapshot(conn, match, stats=None):
     changed = (not last or last["minute"] != minute or last["status"] != status_short
                or last["home_goals"] != goals.get("home") or last["away_goals"] != goals.get("away")
                or (corners["home"] is not None and str(last["corners_home"]) != str(corners["home"]))
-               or (corners["away"] is not None and str(last["corners_away"]) != str(corners["away"])))
+               or (corners["away"] is not None and str(last["corners_away"]) != str(corners["away"])) or stats is not None)
     if changed or not last:
         conn.execute("""INSERT INTO snapshots
             (fixture_key, observed_at, minute, status, home_goals, away_goals, corners_home, corners_away, stats_json)
@@ -247,27 +248,36 @@ def run_once(conn, cycle):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Independent football history collector")
+    parser.add_argument("--once", action="store_true", help="Run a single collection cycle and exit")
+    args = parser.parse_args()
     if not API_KEY:
         raise SystemExit("FIVE_DOLLAR_FOOTBALL_API_KEY environment variable is required.")
     if not DATABASE_URL:
         raise SystemExit("DATABASE_URL is required for a persistent independent worker; configure PostgreSQL.")
     conn = connect_history_db(DATABASE_URL)
-    cycle = 0
+    cycle = int(time.time() // 300) if args.once else 0
     log.info("Collector started: poll=%ss stats_every=%s odds_every=%s max_fixtures=%s",
              POLL_SECONDS, STATS_EVERY, ODDS_EVERY, MAX_FIXTURES)
     while not STOP:
-        cycle += 1
+        if not args.once:
+            cycle += 1
         started = time.monotonic()
         try:
             run_once(conn, cycle)
         except Exception as exc:
             log.exception("Collection cycle failed: %s", str(exc)[:220])
+            if args.once:
+                conn.close()
+                raise
             try:
                 conn.close()
             except Exception:
                 pass
             time.sleep(3)
             conn = connect_history_db(DATABASE_URL)
+        if args.once:
+            break
         elapsed = time.monotonic() - started
         time.sleep(max(1, POLL_SECONDS - elapsed))
     conn.close()
