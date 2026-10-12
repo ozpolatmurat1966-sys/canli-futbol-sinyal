@@ -39,6 +39,9 @@ SCHEMA = [
         id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL, status TEXT NOT NULL, detail TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_collector_runs_time ON collector_runs(run_at)",
+    """CREATE TABLE IF NOT EXISTS collector_state (
+        state_key TEXT PRIMARY KEY, state_value TEXT, updated_at TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS alerts_sent (
         alert_key TEXT PRIMARY KEY, fixture_key TEXT, sent_at TEXT, message TEXT
     )""",
