@@ -33,12 +33,12 @@ streamlit run app.py
 ## Yeni canlı sinyal özellikleri
 - **Trendler:** Son 5/10/15 dakika kıyaslaması yalnızca uygulamanın daha önce kaydettiği zaman damgalı skor/korner kayıtlarıyla hesaplanır. Yeterli kayıt yoksa satır gösterilmez.
 - **Oran hareketi:** Aynı maç/pazar/seçenek/şirket için farklı zamanlarda en az iki gözlem kaydedilmesi gerekir. Oranları maç ekranından tekrar yüklemek yeni gözlem oluşturabilir.
-- **Telegram:** Streamlit Secrets içine `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` eklenirse Canlı sinyaller sekmesindeki buton seçilen gözlenen sinyalleri gönderir. Bu, arka planda sürekli çalışan bir bildirim servisi değildir; kullanıcı butona basar.
+- **Telegram:** Streamlit Secrets içindeki `TELEGRAM_BOT_TOKEN` ve `TELEGRAM_CHAT_ID` ile Canlı sinyaller sekmesindeki manuel gönderim çalışır. Aynı iki değer GitHub Actions secrets içine eklenirse bağımsız collector gözlenen skor/korner değişimlerini otomatik bildirebilir.
 - **Kalıcı geçmiş:** `FOOTBALL_HISTORY_DB_PATH` değişkenini hosting sağlayıcısındaki kalıcı disk üzerinde yazılabilir bir dosya yoluna ayarla. Geçici dosya sistemi sıfırlanırsa varsayılan SQLite geçmişi kaybolabilir.
 - **Otomatik testler:** GitHub Actions, `tests/test_signal_engine.py` testlerini ve Python derleme kontrolünü çalıştırır.
 
 ## Bilinen sınırlar
-- Streamlit oturumu dışında bağımsız arka plan toplayıcısı henüz yoktur. Otomatik yenileme için uygulama sekmesinin açık olması ve canlı yenilemenin etkinleştirilmesi gerekir.
+- Streamlit oturumundan bağımsız `background_collector.py` ve 5 dakikalık GitHub Actions denemesi vardır. Bunun çalışması için `DATABASE_URL` ve `FIVE_DOLLAR_FOOTBALL_API_KEY` Actions secrets içinde tanımlı olmalı; GitHub zamanlanmış işleri gecikebilir.
 - Lig/kaynak kapsam tablosu uygulamanın gözlemlediği ligleri listeler; bütün dünyadaki liglerin tarandığı anlamına gelmez.
 - Oyuncu bahis pazarları yalnızca veri sağlayıcısı oran döndürürse gösterilebilir; oyuncu prop piyasalarının eksiksiz kapsaması garanti edilmez.
 - Deneysel 10 dakikalık sinyaller kalibre edilmiş tahmin modeli değildir. Geçmiş performans metrikleri yalnızca sonuçla eşleştirilebilen kayıtlar için hesaplanır.
@@ -52,7 +52,7 @@ Bu proje artık Streamlit oturumundan bağımsız bir toplayıcı içerir:
 - Aynı bölüme `FIVE_DOLLAR_FOOTBALL_API_KEY` secret'ını da ekle. Secret eklenmezse zamanlanmış collector güvenli biçimde veri toplama adımını atlar.
 - Streamlit Secrets örneği: `DATABASE_URL = "postgresql://..."` ve `FIVE_DOLLAR_FOOTBALL_API_KEY = "..."`. Gerçek değerleri kaynak koda veya README'ye yazma.
 - Toplayıcı ilk etapta 5DollarFootballAPI kaynağını kullanır. Kaynak anahtarı/ücretsiz plan kapsamı, API kotası ve oran endpoint'i izinleri hâlâ geçerlidir. Lig veya oyuncu pazarı kaynakta yoksa başka bir kaynaktan varmış gibi üretilmez.
-- Zamanlanmış iş sınırlı sayıda canlı maça bakar; varsayılan iş akışı en fazla 8 maç işler, istatistikleri her ikinci turda ve oranları her altıncı turda sorgular. Kota/masrafı izleyerek bu değerleri değiştir.
+- Zamanlanmış iş sınırlı sayıda canlı maça bakar; varsayılan iş akışı en fazla 8 maç işler, canlı maç + desteklenen istatistik/olayları tek toplu istekle alır ve oranları her altıncı turda sorgular. Kota/masrafı izleyerek bu değerleri değiştir.
 
 ## Tarihsel kalibrasyon
 - Geçmişte sonucu değerlendirilebilen 10 dakikalık deneysel tahminler yeterli sayıya ulaştığında benzer geçmiş olasılıkların gerçekleşme oranından düzeltilmiş olasılık üretilebilir.
