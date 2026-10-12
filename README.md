@@ -100,3 +100,5 @@ Bağımsız toplayıcı canlı maçlara ek olarak yaklaşık saatte bir İstanbu
 - Tam 1X2 oran üçlüsü varsa ham oran olasılıkları normalize edilerek yaklaşık marjdan arındırılmış piyasa dağılımı gösterilir. Bu bağımsız model tahmini değildir.
 - Arka plan toplayıcısı için GitHub Actions DATABASE_URL ve FIVE_DOLLAR_FOOTBALL_API_KEY sırları zorunludur. Sırlar eksikse iş artık yanlış biçimde başarılı görünmek yerine başarısız olur.
 - Ücretsiz 5DollarFootballAPI planı tüm dünya liglerini garanti etmez; sağlayıcının resmi dokümantasyonuna göre ücretsiz kapsam ilk 5 ligle sınırlıdır. API anahtarı ve kalıcı veritabanı olmadan gerçek canlı veri toplama doğrulanmış sayılmaz.
+
+- Geçmiş aynı-lig sonuçları yeterli olduğunda deneysel Poisson tabanlı 1X2, gol üst ve karşılıklı gol olasılıkları gösterilir; geçmiş köşe/kart verisi yeterliyse bu pazarlar da yaklaşık hesaplanır. Bu baseline henüz doğrulanmış bir bahis modeli değildir ve verisi yetersiz maçlarda tahmin üretmez.
