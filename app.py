@@ -14,6 +14,7 @@ import json
 from signal_engine import build_trend_rows, summarize_odds_movements, format_telegram_message
 from model_engine import calibrate_probability, evaluate_calibration
 from player_props import extract_player_prop_rows
+from advanced_features import render_advanced_features
 
 def history_db_connect():
     """Use PostgreSQL when DATABASE_URL is configured; otherwise use local SQLite."""
@@ -4048,6 +4049,7 @@ with signals_tab:
             st.caption("Bu liste sağlayıcıların tüm dünya liglerini değil, uygulamanın bugüne kadar gördüğü ve kaydettiği ligleri gösterir.")
         else:
             st.info("Kapsam taraması için önce canlı maç veya tarih fikstürü yüklenmeli.")
+    render_advanced_features(st, history_db_connect, FIVE_DOLLAR_FOOTBALL_API_KEY)
     except Exception as signal_error:
         st.error(f"Canlı sinyal ekranı açılamadı: {signal_error}")
 
