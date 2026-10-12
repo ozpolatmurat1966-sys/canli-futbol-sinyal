@@ -127,16 +127,20 @@ def render_advanced_features(st, db_connect, api_key):
             paper_selection = st.text_input("Seçim", placeholder="Örn. Ev sahibi veya 2.5 üst")
             paper_odds = st.number_input("Gözlenen oran", min_value=1.01, max_value=1000.0, value=2.0, step=0.05)
             paper_stake = st.number_input("Sanal birim", min_value=0.1, max_value=100000.0, value=10.0, step=1.0)
+            paper_has_probability = st.checkbox("Bu seçim için önceden kaydedilmiş model olasılığım var")
+            paper_probability_percent = st.number_input("Model olasılığı (%)", min_value=0.0, max_value=100.0, value=50.0, step=1.0,
+                                                        disabled=not paper_has_probability)
             add_paper = st.form_submit_button("Sanal seçimi kaydet")
         if add_paper:
             if not paper_match.strip() or not paper_selection.strip():
                 st.error("Maç ve seçim alanlarını doldur.")
             else:
+                model_probability = float(paper_probability_percent) / 100 if paper_has_probability else None
                 conn.execute("""INSERT INTO paper_bets
-                    (fixture_key, market, selection, odds, stake, placed_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, 'open')""",
+                    (fixture_key, market, selection, odds, model_probability, stake, placed_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'open')""",
                     (paper_match.strip(), paper_market, paper_selection.strip(), float(paper_odds),
-                     float(paper_stake), datetime.now(timezone.utc).isoformat()))
+                     model_probability, float(paper_stake), datetime.now(timezone.utc).isoformat()))
                 conn.commit()
                 st.success("Sanal seçim kaydedildi. Sonucunu aşağıdan işaretleyebilirsin.")
         open_bets = conn.execute("SELECT id, fixture_key, market, selection, odds, stake, placed_at FROM paper_bets WHERE status='open' ORDER BY id DESC LIMIT 100").fetchall()
@@ -170,7 +174,7 @@ def render_advanced_features(st, db_connect, api_key):
     st.markdown("### 📊 Sanal bahis performansı: ROI / düşüş")
     conn = db_connect()
     try:
-        rows = conn.execute("SELECT odds, stake, settled_result FROM paper_bets WHERE status='settled' ORDER BY settled_at, id").fetchall()
+        rows = conn.execute("SELECT odds, stake, settled_result, model_probability FROM paper_bets WHERE status='settled' ORDER BY settled_at, id").fetchall()
         metrics = evaluate_paper_bets([dict(r) for r in rows])
         if metrics["ready"]:
             c1, c2, c3, c4 = st.columns(4)
@@ -179,6 +183,11 @@ def render_advanced_features(st, db_connect, api_key):
             c3.metric("Net kâr/zarar", f'{metrics["profit"]:+.2f}')
             c4.metric("Maks. düşüş", f'{metrics["max_drawdown"]:.2f}')
             st.caption(f'Kazanma oranı: {metrics["win_rate"]:.1%}. Bu yalnızca kaydedilmiş sanal bahislerin geçmiş sonucudur; gerçek para performansı değildir.')
+            if metrics.get("brier_score") is not None:
+                st.metric("Model Brier skoru", f'{metrics["brier_score"]:.3f}')
+                st.caption(f'Model olasılığı girilmiş {metrics["brier_samples"]} sonuç üzerinden hesaplanır; düşük örnek sayısı güvenilirlik kanıtı değildir.')
+            else:
+                st.caption("Brier skoru için seçim kaydedilirken model olasılığı girilmiş sonuçlanmış sanal bahisler gerekir.")
         else:
             st.info("ROI henüz hesaplanamaz: sistemde sonuçlanmış sanal bahis kaydı yok. Eksik oran veya sonuçlardan kârlılık tahmini üretilmez.")
     finally:
