@@ -48,7 +48,7 @@ signal.signal(signal.SIGINT, stop_worker)
 signal.signal(signal.SIGTERM, stop_worker)
 
 
-def request_json(path, params=None):
+def request_payload(path, params=None):
     response = SESSION.get(
         f"{API_BASE}{path}", params=params,
         headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"},
@@ -62,6 +62,11 @@ def request_json(path, params=None):
     payload = response.json()
     if not isinstance(payload, dict) or payload.get("success") == 0:
         raise RuntimeError(str((payload.get("error") or {}).get("message") if isinstance(payload, dict) else "Unexpected JSON response"))
+    return payload
+
+
+def request_json(path, params=None):
+    payload = request_payload(path, params)
     return payload.get("data") or payload.get("response") or []
 
 
@@ -416,6 +421,68 @@ def collect_today_fixtures(conn):
     log.info("Today's Istanbul-day fixtures observed: %s", saved)
 
 
+def collect_historical_batch(conn):
+    """Backfill one page of finished fixtures per hour, respecting the provider's free-tier limits."""
+    leagues = conn.execute("""SELECT provider_league_id, name FROM league_inventory
+        WHERE is_popular=1 ORDER BY name, provider_league_id""").fetchall()
+    if not leagues:
+        leagues = conn.execute("""SELECT provider_league_id, name FROM league_inventory
+            ORDER BY is_popular DESC, name, provider_league_id LIMIT 5""").fetchall()
+    if not leagues:
+        log.info("Historical backfill skipped: no league inventory available yet")
+        return {"saved": 0, "reason": "no_leagues"}
+
+    state_row = conn.execute(
+        "SELECT state_value FROM collector_state WHERE state_key=?",
+        ("finished_fixture_backfill",)
+    ).fetchone()
+    try:
+        cursor = json.loads(state_row["state_value"]) if state_row and state_row["state_value"] else {}
+    except (TypeError, ValueError):
+        cursor = {}
+    try:
+        league_index = int(cursor.get("league_index", 0)) % len(leagues)
+        page = max(1, int(cursor.get("page", 1)))
+    except (TypeError, ValueError):
+        league_index, page = 0, 1
+
+    league = leagues[league_index]
+    league_id = str(league["provider_league_id"])
+    payload = request_payload(
+        f"/leagues/{league_id}/fixtures",
+        {"status": "finished", "page": page, "per_page": 100},
+    )
+    items = payload.get("data") or payload.get("response") or []
+    if isinstance(items, dict):
+        items = items.get("fixtures") or items.get("data") or []
+    if not isinstance(items, list):
+        items = []
+    saved = 0
+    for item in items:
+        match = normalize_fixture(item)
+        if not match:
+            continue
+        raw = item.get("statistics") or item.get("stats")
+        save_snapshot(conn, match, raw)
+        saved += 1
+
+    pagination = payload.get("pagination") or {}
+    has_more = bool(pagination.get("has_more", False))
+    if has_more:
+        next_cursor = {"league_index": league_index, "page": page + 1}
+    else:
+        next_cursor = {"league_index": (league_index + 1) % len(leagues), "page": 1}
+    conn.execute("""INSERT INTO collector_state (state_key, state_value, updated_at)
+        VALUES (?, ?, ?) ON CONFLICT(state_key) DO UPDATE SET
+        state_value=excluded.state_value, updated_at=excluded.updated_at""",
+        ("finished_fixture_backfill", json.dumps(next_cursor), datetime.now(timezone.utc).isoformat()))
+    conn.commit()
+    log.info("Historical fixtures page saved: league=%s (%s), page=%s, rows=%s, has_more=%s",
+             league["name"], league_id, page, saved, has_more)
+    return {"saved": saved, "league_id": league_id, "league": league["name"],
+            "page": page, "has_more": has_more, "next_cursor": next_cursor}
+
+
 def run_once(conn, cycle):
     retry_pending_telegram_alerts(conn)
     collect_leagues_if_stale(conn)
@@ -424,6 +491,10 @@ def run_once(conn, cycle):
             collect_today_fixtures(conn)
         except Exception as exc:
             log.warning("Daily fixture collection failed: %s", str(exc)[:180])
+        try:
+            collect_historical_batch(conn)
+        except Exception as exc:
+            log.warning("Historical backfill failed: %s", str(exc)[:180])
     # A single bulk request for live fixtures plus stats/events limits free-tier request use.
     items = request_json("/fixtures", {"status": "live", "per_page": 50, "include": "stats,events"})
     matches = [normalized for item in items if (normalized := normalize_fixture(item))]
