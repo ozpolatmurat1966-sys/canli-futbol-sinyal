@@ -4064,7 +4064,7 @@ with info_tab:
 - API çağrıları uç noktaya göre önbelleğe alınır; Kaynak durumu sekmesi sağlayıcıların son yanıt durumunu gösterir.
 - İstatistik/kadro butonları API'nin veri döndürdüğü maçlarda sonuç gösterir; kapsama girmeyen maçlarda uygulama veri üretemez.
 - Veri eksikse sistem bunu açıkça söyler; veri uydurmaz.
-- Canlı sinyaller sekmesi kaydedilmiş gözlemlerden 5/10/15 dakikalık skor/korner değişimini, kayıtlı oran hareketlerini, gözlemlenen lig/kaynak kapsamını ve isteğe bağlı Telegram gönderimini gösterir. Arka planda bağımsız veri toplayıcısı ve kalibre edilmiş bahis olasılığı modeli hâlâ mevcut değildir.
+- Canlı sinyaller sekmesi 5/10/15 dakikalık değişimleri, oran hareketlerini, lig envanterini, veri kalitesini, sanal bahis ROI takibini ve isteğe bağlı Telegram uyarılarını gösterir. Bağımsız collector için GitHub Actions secrets ve kalıcı PostgreSQL gerekir. Genel bahis pazarları için doğrulanmış model olasılığı henüz yoksa karar kapısı Pas geç verir.
 - Ek kaynaklar: football-data.org, OpenLigaDB, ESPN ve isteğe bağlı Bzzoiro Sports Data (BSD_API_TOKEN). Bu kaynaklar tarih fikstürünü genişletir; küresel canlı istatistik veya bahis oranı sağlamaz.
 - Sportmonks ücretsiz planı sınırlı lig kapsamındadır; API-Football ücretsiz paketi günlük 100 istekle sınırlıdır. Kaynakları birleştirmek bu limitleri kaldırmaz. Sportmonks canlı oran erişimi ücretsiz planda açık olmayabilir. Haber özeti, herkese açık RSS başlıklarını anahtar-sözcüklerle sınıflandırır; tüm interneti veya sosyal medyayı kapsamaz. API anahtarlarını kodun içine yazmayın; Secrets bölümünde saklayın.
 """)
