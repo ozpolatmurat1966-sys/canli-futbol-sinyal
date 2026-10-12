@@ -5,6 +5,7 @@ import requests
 from backtest_engine import evaluate_paper_bets
 from decision_engine import assess_market
 from readiness_center import render_readiness_center
+from market_engine import detect_odds_movements, normalize_implied_probabilities
 
 API_BASE = "https://api.5dollarfootballapi.com/v1"
 
@@ -218,6 +219,67 @@ def render_advanced_features(st, db_connect, api_key):
             })
         st.dataframe(readiness, use_container_width=True, hide_index=True)
         st.caption("Bir pazarın oranının bulunması, o pazar için modelin eğitildiği veya doğrulandığı anlamına gelmez.")
+    finally:
+        conn.close()
+
+    st.markdown("### 📉 Oran hareketleri ve marjdan arındırılmış piyasa olasılıkları")
+    st.caption("Hesaplar kaydedilmiş şirket oranlarından üretilir; bağımsız tahmin veya şike kanıtı değildir. Yeterli gözlem yoksa sonuç gösterilmez.")
+    conn = db_connect()
+    try:
+        odds_rows = conn.execute("""SELECT o.fixture_key, o.observed_at, o.market, o.option_name,
+            o.bookmaker, o.odd, o.stage, o.line, f.home, f.away, f.league
+            FROM odds_history o LEFT JOIN fixtures f ON f.fixture_key=o.fixture_key
+            WHERE o.odd > 1 ORDER BY o.observed_at DESC LIMIT 12000""").fetchall()
+        odds_rows = [dict(row) for row in odds_rows]
+        movements = detect_odds_movements(odds_rows)
+        if movements:
+            st.dataframe([{
+                "Maç": f'{m["home"]} - {m["away"]}', "Lig": m["league"],
+                "Pazar": m["market"], "Seçim": m["option_name"], "Şirket": m["bookmaker"],
+                "Oran önce": m["previous_odd"], "Oran şimdi": m["latest_odd"],
+                "Değişim": round(m["change"], 3), "Değişim %": f'{m["relative_change"]:+.1%}',
+                "Hareket": m["direction"], "Son kayıt": m["observed_at"],
+            } for m in movements[:40]], use_container_width=True, hide_index=True)
+        else:
+            st.info("Dikkate değer oran hareketi için aynı seçimde en az iki farklı zamanlı kayıt henüz yok.")
+        latest_prices = {}
+        for row in sorted(odds_rows, key=lambda item: str(item.get("observed_at") or "")):
+            market = str(row.get("market") or "").lower()
+            if not any(term in market for term in ("1x2", "maç sonucu", "match winner")):
+                continue
+            option = str(row.get("option_name") or "").strip().lower()
+            option_map = {"home": "Ev sahibi", "ev sahibi": "Ev sahibi",
+                          "draw": "Beraberlik", "beraberlik": "Beraberlik",
+                          "away": "Deplasman", "deplasman": "Deplasman"}
+            selection = option_map.get(option)
+            if not selection:
+                continue
+            key = (row.get("fixture_key"), row.get("market"), row.get("bookmaker"),
+                   row.get("stage"), row.get("line"))
+            latest_prices.setdefault(key, {"row": row, "prices": {}})["prices"][selection] = row.get("odd")
+        fair_rows = []
+        for group in latest_prices.values():
+            prices = group["prices"]
+            if set(prices) != {"Ev sahibi", "Beraberlik", "Deplasman"}:
+                continue
+            calc = normalize_implied_probabilities(prices)
+            fair = calc["fair_probabilities"]
+            row = group["row"]
+            fair_rows.append({
+                "Maç": f'{row.get("home") or "Ev sahibi"} - {row.get("away") or "Deplasman"}',
+                "Lig": row.get("league") or "Lig bilinmiyor",
+                "Şirket": row.get("bookmaker") or "Bilinmiyor",
+                "Ev sahibi": f'{fair["Ev sahibi"]:.1%}',
+                "Beraberlik": f'{fair["Beraberlik"]:.1%}',
+                "Deplasman": f'{fair["Deplasman"]:.1%}',
+                "Yaklaşık şirket marjı": f'{calc["overround"]:.1%}' if calc["overround"] is not None else "—",
+                "Aşama": row.get("stage") or "—",
+            })
+        if fair_rows:
+            st.markdown("#### Marjdan arındırılmış 1X2 piyasa dağılımı")
+            st.dataframe(fair_rows[:40], use_container_width=True, hide_index=True)
+        else:
+            st.info("Marjdan arındırılmış 1X2 hesabı için aynı şirket ve aşamada ev sahibi/beraberlik/deplasman oranlarının üçü de gerekli.")
     finally:
         conn.close()
 
