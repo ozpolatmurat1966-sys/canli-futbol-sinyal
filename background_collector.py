@@ -222,7 +222,7 @@ def save_odds(conn, key, payload):
                 price = float(node.get(outcome))
             except (TypeError, ValueError):
                 continue
-            if price > 1 and market.lower() not in ("player shots", "player goals", "player assists", "player cards", "player fouls"):
+            if price > 1 and not any(term in market.lower() for term in ("player", "oyuncu")):
                 conn.execute("""INSERT INTO odds_history
                     (fixture_key, observed_at, market, option_name, bookmaker, odd, stage, line)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
