@@ -116,6 +116,56 @@ def render_advanced_features(st, db_connect, api_key):
         {"Pazar grubu": "Oyuncu bahisleri", "Gerçek oran geçmişi": "Sağlayıcı döndürürse", "Doğrulanmış pazar modeli": "Henüz yok", "Karar": "Pas geç"},
     ], use_container_width=True, hide_index=True)
 
+    st.markdown("### 🧾 Sanal kupon kayıt defteri")
+    st.caption("Bu alan yalnızca senin manuel kaydettiğin sanal seçimleri izler; sistem bahis önerisi üretmez ve gerçek para hareketi yapmaz.")
+    conn = db_connect()
+    try:
+        with st.form("paper_bet_add_form"):
+            paper_match = st.text_input("Maç / referans", placeholder="Örn. Takım A - Takım B")
+            paper_market = st.selectbox("Pazar", ["1X2", "Gol alt/üst", "Korner", "Kart", "Oyuncu bahisleri", "Diğer"])
+            paper_selection = st.text_input("Seçim", placeholder="Örn. Ev sahibi veya 2.5 üst")
+            paper_odds = st.number_input("Gözlenen oran", min_value=1.01, max_value=1000.0, value=2.0, step=0.05)
+            paper_stake = st.number_input("Sanal birim", min_value=0.1, max_value=100000.0, value=10.0, step=1.0)
+            add_paper = st.form_submit_button("Sanal seçimi kaydet")
+        if add_paper:
+            if not paper_match.strip() or not paper_selection.strip():
+                st.error("Maç ve seçim alanlarını doldur.")
+            else:
+                conn.execute("""INSERT INTO paper_bets
+                    (fixture_key, market, selection, odds, stake, placed_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'open')""",
+                    (paper_match.strip(), paper_market, paper_selection.strip(), float(paper_odds),
+                     float(paper_stake), datetime.now(timezone.utc).isoformat()))
+                conn.commit()
+                st.success("Sanal seçim kaydedildi. Sonucunu aşağıdan işaretleyebilirsin.")
+        open_bets = conn.execute("SELECT id, fixture_key, market, selection, odds, stake, placed_at FROM paper_bets WHERE status='open' ORDER BY id DESC LIMIT 100").fetchall()
+        if open_bets:
+            st.dataframe([{
+                "ID": r["id"], "Maç": r["fixture_key"], "Pazar": r["market"],
+                "Seçim": r["selection"], "Oran": r["odds"], "Sanal birim": r["stake"],
+                "Kayıt zamanı": r["placed_at"]
+            } for r in open_bets], use_container_width=True, hide_index=True)
+            with st.form("paper_bet_settle_form"):
+                selected_id = st.selectbox("Sonuçlandırılacak sanal seçim", [int(r["id"]) for r in open_bets],
+                                           format_func=lambda value: next(
+                                               f'#{r["id"]} {r["fixture_key"]} · {r["selection"]} @ {r["odds"]}'
+                                               for r in open_bets if int(r["id"]) == value))
+                settled_as = st.radio("Sonuç", ["Kazandı", "Kaybetti", "İptal"], horizontal=True)
+                settle_paper = st.form_submit_button("Sanal seçimi sonuçlandır")
+            if settle_paper:
+                if settled_as == "İptal":
+                    conn.execute("UPDATE paper_bets SET status='void', settled_at=? WHERE id=? AND status='open'",
+                                 (datetime.now(timezone.utc).isoformat(), selected_id))
+                else:
+                    conn.execute("UPDATE paper_bets SET status='settled', settled_result=?, settled_at=? WHERE id=? AND status='open'",
+                                 (1 if settled_as == "Kazandı" else 0, datetime.now(timezone.utc).isoformat(), selected_id))
+                conn.commit()
+                st.success("Sanal seçim sonucu kaydedildi.")
+        else:
+            st.info("Açık sanal seçim yok. Gerçek bahis değil, performans takibi için kayıt ekleyebilirsin.")
+    finally:
+        conn.close()
+
     st.markdown("### 📊 Sanal bahis performansı: ROI / düşüş")
     conn = db_connect()
     try:
