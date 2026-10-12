@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from background_collector import collect_historical_batch
+from background_collector import collect_historical_batch, odds_movement_alert_lines
 from db_store import connect_history_db
 
 
@@ -32,6 +32,25 @@ class HistoricalBackfillTests(unittest.TestCase):
                     ("finished_fixture_backfill",)
                 ).fetchone()
                 self.assertEqual(json.loads(state["state_value"]), {"league_index": 0, "page": 2})
+            finally:
+                conn.close()
+
+    def test_odds_movement_alert_requires_distinct_timestamps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            conn = connect_history_db(sqlite_path=os.path.join(directory, "history.sqlite3"))
+            try:
+                for timestamp, odd in (
+                    ("2026-10-12T10:00:00+00:00", 2.2),
+                    ("2026-10-12T10:05:00+00:00", 1.8),
+                ):
+                    conn.execute("""INSERT INTO odds_history
+                        (fixture_key, observed_at, market, option_name, bookmaker, odd, stage, line)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        ("f1", timestamp, "1X2", "Home", "Bet365", odd, "Inplay", ""))
+                conn.commit()
+                lines = odds_movement_alert_lines(conn, "f1")
+                self.assertEqual(len(lines), 1)
+                self.assertIn("2.20 → 1.80", lines[0])
             finally:
                 conn.close()
 
