@@ -6,6 +6,7 @@ from backtest_engine import evaluate_paper_bets
 from decision_engine import assess_market
 from readiness_center import render_readiness_center
 from market_engine import detect_odds_movements, normalize_implied_probabilities
+from team_model import estimate_fixture_markets
 
 API_BASE = "https://api.5dollarfootballapi.com/v1"
 
@@ -282,5 +283,47 @@ def render_advanced_features(st, db_connect, api_key):
             st.info("Marjdan arındırılmış 1X2 hesabı için aynı şirket ve aşamada ev sahibi/beraberlik/deplasman oranlarının üçü de gerekli.")
     finally:
         conn.close()
+
+    st.markdown("### ⚽ Geçmiş sonuçlardan deneysel pazar modeli")
+    st.caption("Aynı ligde yeterli tamamlanmış maç varsa Poisson tabanlı ön maç olasılıkları hesaplanır. Bu model henüz bağımsız testlerle doğrulanmış değildir; otomatik bahis tavsiyesi üretmez. Korner/kart olasılıkları yalnızca bu istatistikler geçmişte kaydedilmişse gösterilir.")
+    conn = db_connect()
+    try:
+        history_rows = [dict(row) for row in conn.execute("""SELECT fixture_key, match_date, league, home, away,
+            home_goals, away_goals, finished, status, raw_json FROM fixtures
+            WHERE finished=1 AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+            ORDER BY match_date DESC LIMIT 5000""").fetchall()]
+        upcoming_rows = [dict(row) for row in conn.execute("""SELECT fixture_key, match_date, league, home, away,
+            status, finished FROM fixtures
+            WHERE finished=0 AND UPPER(status) IN ('NS','SCHEDULED','NOT_STARTED','FIXTURE')
+              AND home IS NOT NULL AND away IS NOT NULL
+            ORDER BY match_date LIMIT 60""").fetchall()]
+    finally:
+        conn.close()
+    model_output, model_missing = [], []
+    for match in upcoming_rows:
+        result = estimate_fixture_markets(history_rows, match["home"], match["away"], match["league"])
+        label = f'{match["home"]} - {match["away"]}'
+        if not result["ready"]:
+            model_missing.append({"Maç": label, "Lig": match["league"], "Durum": result["reason"]})
+            continue
+        for market in result["markets"]:
+            model_output.append({
+                "Maç": label, "Lig": match["league"], "Pazar": market["market"],
+                "Deneysel olasılık": f'{market["probability"]:.1%}',
+                "Beklenen gol (ev/deplasman)": f'{result["expected_goals_home"]:.2f} / {result["expected_goals_away"]:.2f}',
+                "Lig örneği": result["samples"]["league"],
+                "Ev sahibi maç sayısı": result["samples"]["home_team"],
+                "Deplasman maç sayısı": result["samples"]["away_team"],
+                "İstatistik örneği": market.get("stat_samples", "—"),
+            })
+    if model_output:
+        st.dataframe(model_output[:120], use_container_width=True, hide_index=True)
+    elif not upcoming_rows:
+        st.info("Veritabanında model uygulanabilecek yaklaşan maç yok. Fikstür ve geçmiş sonuçlar kaydedildikçe bu bölüm dolar.")
+    else:
+        st.info("Yaklaşan maçlar bulundu ancak aynı lig/takım için yeterli geçmiş sonuç henüz yok.")
+    if model_missing:
+        with st.expander(f"Örnek yetersiz olduğu için model üretmeyen maçlar ({len(model_missing)})"):
+            st.dataframe(model_missing[:40], use_container_width=True, hide_index=True)
 
     render_readiness_center(st, db_connect, api_key)
