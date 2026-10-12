@@ -33,9 +33,9 @@ class ReadinessCenterTests(unittest.TestCase):
     def test_provider_smoke_test_checks_leagues_and_live_fixtures(self, mock_get):
         mock_get.return_value = FakeResponse(200, {"success": 1, "data": [{"id": 1}]})
         checks = smoke_test_5dollar("test-key")
-        self.assertEqual(len(checks), 2)
+        self.assertEqual(len(checks), 3)
         self.assertTrue(all(item["ok"] for item in checks))
-        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(mock_get.call_count, 3)
 
     @patch("readiness_center.SESSION.get")
     def test_provider_smoke_test_reports_http_error(self, mock_get):
