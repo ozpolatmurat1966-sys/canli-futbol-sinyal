@@ -166,6 +166,13 @@ def render_readiness_center(st, db_connect, api_key):
         st.warning("Kalıcı DATABASE_URL bulunamadı. Uygulama yerel SQLite kullanıyor olabilir; barındırma yeniden başlatıldığında geçmiş verilerin korunacağı garanti edilmez ve arka plan toplayıcısı kalıcı veritabanına yazamaz.")
     if not str(api_key or "").strip():
         st.warning("FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil. Sağlayıcı canlı verileri, lig envanteri ve oran bağlantıları doğrulanamaz.")
+    if not database_url or not str(api_key or "").strip():
+        st.markdown("#### Kurulumda kalan bağlantılar")
+        st.write("Bu iki ayar uygulama ile arka plan toplayıcısının aynı veri kaynağını kullanabilmesi için gereklidir:")
+        st.markdown("- `DATABASE_URL`: Kalıcı PostgreSQL bağlantı adresi. Streamlit uygulamasının Secrets bölümüne ve GitHub Actions Secrets bölümüne eklenmeli.")
+        st.markdown("- `FIVE_DOLLAR_FOOTBALL_API_KEY`: 5DollarFootballAPI anahtarı. Hem Streamlit Secrets hem GitHub Actions Secrets bölümüne eklenmeli.")
+        st.markdown("[GitHub Actions Secrets ayarlarını aç](https://github.com/ozpolatmurat1966-sys/canli-futbol-sinyal/settings/secrets/actions) · [Streamlit Cloud'u aç](https://share.streamlit.io/)")
+        st.caption("GitHub Secrets ve Streamlit Secrets birbirinden ayrıdır; aynı isimli ayarlar iki yerde de tanımlanmalıdır. Gerçek anahtarları sohbet mesajlarına veya kod dosyalarına yazmayın.")
     if st.button("🔎 API bağlantılarını şimdi test et", key="run_readiness_provider_checks"):
         with st.spinner("Sağlayıcı bağlantıları kontrol ediliyor..."):
             checks = smoke_test_5dollar(api_key)
