@@ -5,6 +5,13 @@ import re
 PLAYER_TERMS = ("player", "oyuncu", "shots on target", "player shots", "player goals",
                 "player assists", "player cards", "player fouls", "to score", "anytime scorer")
 
+PLAYER_MARKET_NAMES = {
+    "player_shots": "Player Shots", "player_goals": "Player Goals",
+    "player_assists": "Player Assists", "player_cards": "Player Cards",
+    "player_fouls": "Player Fouls", "player_shots_on_target": "Player Shots on Target",
+    "anytime_scorer": "Anytime Goalscorer", "to_score": "Player to Score",
+}
+
 
 def extract_player_prop_rows(payload):
     """Only extracts rows explicitly marked as player markets; does not infer missing prices."""
@@ -72,7 +79,7 @@ def extract_player_prop_rows(payload):
                 if key_lower in ("player", "player_name", "playername") and isinstance(value, dict):
                     child_context["player"] = value.get("name") or value.get("display_name") or child_context.get("player")
                 elif any(term in key_lower for term in PLAYER_TERMS) or key_lower.startswith("player_"):
-                    child_context["market"] = market_names.get(key_lower, key_lower.replace("_", " ").title())
+                    child_context["market"] = PLAYER_MARKET_NAMES.get(key_lower, key_lower.replace("_", " ").title())
                 elif key_lower in ("opening", "closing", "inplay", "live"):
                     child_context["stage"] = key_lower.title()
                 walk(value, child_context)
