@@ -4049,7 +4049,7 @@ with signals_tab:
             st.caption("Bu liste sağlayıcıların tüm dünya liglerini değil, uygulamanın bugüne kadar gördüğü ve kaydettiği ligleri gösterir.")
         else:
             st.info("Kapsam taraması için önce canlı maç veya tarih fikstürü yüklenmeli.")
-    render_advanced_features(st, history_db_connect, FIVE_DOLLAR_FOOTBALL_API_KEY)
+        render_advanced_features(st, history_db_connect, FIVE_DOLLAR_FOOTBALL_API_KEY)
     except Exception as signal_error:
         st.error(f"Canlı sinyal ekranı açılamadı: {signal_error}")
 
