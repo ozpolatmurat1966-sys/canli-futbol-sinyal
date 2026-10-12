@@ -2353,8 +2353,9 @@ def show_odds(fixture_id, match=None):
             st.warning(err)
             return []
         bookmakers = (payload or {}).get("bookmakers") or []
-        if not bookmakers:
-            st.info("5DollarFootballAPI bu maç için oran kaydı döndürmedi.")
+        player_prop_rows = extract_player_prop_rows(payload)
+        if not bookmakers and not player_prop_rows:
+            st.info("5DollarFootballAPI bu maç için oran veya oyuncu pazarı kaydı döndürmedi.")
             return []
         status = ((match or {}).get("fixture") or {}).get("status") or {}
         is_live = str(status.get("short", "")).upper() in ("LIVE", "HT", "1H", "2H", "IN_PLAY")
@@ -2423,7 +2424,6 @@ def show_odds(fixture_id, match=None):
                         add_price("Gol Alt/Üst", "Alt", quote.get("under"), bookmaker, stage.title(), line)
                         break
         # Player-prop markets are shown only if the provider explicitly returns player-labelled prices.
-        player_prop_rows = extract_player_prop_rows(payload)
         for prop in player_prop_rows:
             add_price(
                 f'Oyuncu pazarı: {prop["Pazar"]}',
