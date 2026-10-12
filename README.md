@@ -73,3 +73,10 @@ Bu proje artık Streamlit oturumundan bağımsız bir toplayıcı içerir:
 - **Kota koruması:** Collector canlı maçları ve desteklenen istatistik/olayları tek toplu istekte alır; GET isteklerinde 429/5xx yanıtlarına sınırlı yeniden deneme ve Retry-After desteği uygular. Oran istekleri ayrı ve daha seyrek yapılır.
 - **Pazar hazırlık tablosu:** 1X2, gol, korner, kart ve oyuncu pazarları için gözlenen oran verisi ile model doğrulama durumunu birbirinden ayırır.
 - Kalıcı lig envanteri ve otomatik Telegram için PostgreSQL `DATABASE_URL` ile Actions secrets içinde `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` ayarla. Anahtarları kod deposuna yazma.
+
+
+## Sistem hazırlık merkezi
+- Canlı sinyaller sekmesinin alt bölümünde **12 başlık için sistem hazırlık merkezi** bulunur.
+- **API bağlantılarını şimdi test et** düğmesi, ayarlı 5DollarFootballAPI anahtarıyla lig ve canlı fikstür uç noktalarını örnek isteklerle kontrol eder. Kontrol sonucu ve zamanı veritabanına kaydedilir.
+- Veritabanı paneli gerçek maç, gözlem, oran, lig ve sanal bahis kayıtlarını sayar; aynı gün ve aynı takım eşleşmelerinde farklı skor kaydı bulunursa olası uyuşmazlıkları listeler.
+- Hazırlık tablosu, var olan özellikleri, yalnızca kısmi desteği olan özellikleri ve harici veri/anahtar gerektiren işleri açıkça ayırır. Bir özelliğin listede görünmesi onun her kaynakta çalıştığını garanti etmez.
