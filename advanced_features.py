@@ -41,7 +41,7 @@ def fetch_leagues(api_key, max_pages=10):
                 rows.append({
                     "provider_league_id": str(lid or ""),
                     "name": str(league.get("name") or league.get("short_name") or "Lig adı yok"),
-                    "country": str(country.get("name") if isinstance(country, dict) else country or "Ülke belirtilmemiş"),
+                    "country": str((country.get("name") if isinstance(country, dict) else country) or "Ülke belirtilmemiş"),
                     "last_fixture_utc": league.get("last_fixture_utc") or "",
                     "is_popular": bool(league.get("is_popular", False)),
                 })
@@ -202,7 +202,7 @@ def render_advanced_features(st, db_connect, api_key):
             readiness.append({
                 "Pazar": label,
                 "Oran gözlemi": sum(x["odds_rows"] for x in matched),
-                "Maç sayısı": len({x["market"] for x in matched}),
+                "Alt pazar sayısı": len(matched),
                 "Şirket sayısı": max([x["bookmakers"] for x in matched], default=0),
                 "Model durumu": "Veri birikimi / doğrulama gerekli",
             })
