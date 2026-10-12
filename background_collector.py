@@ -204,10 +204,41 @@ def save_snapshot(conn, match, stats=None):
     return key, change_lines
 
 
-def send_telegram_alert(conn, fixture_key_value, match, change_lines):
+def retry_pending_telegram_alerts(conn):
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id or not change_lines:
+    if not token or not chat_id:
+        return
+    pending = conn.execute("SELECT * FROM alerts_pending ORDER BY created_at LIMIT 50").fetchall()
+    for row in pending:
+        try:
+            response = SESSION.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": row["message"], "disable_web_page_preview": True},
+                timeout=12,
+            )
+            payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+            if response.ok and payload.get("ok"):
+                conn.execute("INSERT INTO alerts_sent (alert_key, fixture_key, sent_at, message) VALUES (?, ?, ?, ?) ON CONFLICT(alert_key) DO NOTHING",
+                             (row["alert_key"], row["fixture_key"], datetime.now(timezone.utc).isoformat(), row["message"]))
+                conn.execute("DELETE FROM alerts_pending WHERE alert_key=?", (row["alert_key"],))
+                conn.commit()
+                log.info("Telegram alert sent for fixture %s", row["fixture_key"])
+            else:
+                error = f"HTTP {response.status_code}"
+                conn.execute("UPDATE alerts_pending SET attempts=attempts+1, last_error=? WHERE alert_key=?",
+                             (error, row["alert_key"]))
+                conn.commit()
+                log.warning("Telegram alert remains queued: %s", error)
+        except (requests.RequestException, ValueError) as exc:
+            conn.execute("UPDATE alerts_pending SET attempts=attempts+1, last_error=? WHERE alert_key=?",
+                         (str(exc)[:180], row["alert_key"]))
+            conn.commit()
+            log.warning("Telegram alert remains queued: %s", str(exc)[:160])
+
+
+def send_telegram_alert(conn, fixture_key_value, match, change_lines):
+    if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip() or not os.getenv("TELEGRAM_CHAT_ID", "").strip():
         return
     teams = match.get("teams") or {}
     home = (teams.get("home") or {}).get("name") or "Ev sahibi"
@@ -216,27 +247,17 @@ def send_telegram_alert(conn, fixture_key_value, match, change_lines):
     status = match.get("fixture", {}).get("status") or {}
     minute = status.get("elapsed")
     for change in change_lines:
-        message = f"⚽ {league}\n{home} - {away}\nDakika: {minute if minute is not None else '—'}\n{change}\n\nYalnızca veri değişimi bildirimi; bahis tavsiyesi değildir."
+        message = f"⚽ {league}\\n{home} - {away}\\nDakika: {minute if minute is not None else '—'}\\n{change}\\n\\nYalnızca veri değişimi bildirimi; bahis tavsiyesi değildir."
         alert_key = hashlib.sha256(f"{fixture_key_value}|{change}".encode("utf-8")).hexdigest()
-        exists = conn.execute("SELECT alert_key FROM alerts_sent WHERE alert_key=?", (alert_key,)).fetchone()
-        if exists:
+        sent = conn.execute("SELECT alert_key FROM alerts_sent WHERE alert_key=?", (alert_key,)).fetchone()
+        if sent:
             continue
-        try:
-            response = SESSION.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": message, "disable_web_page_preview": True},
-                timeout=12,
-            )
-            payload = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-            if response.ok and payload.get("ok"):
-                conn.execute("INSERT INTO alerts_sent (alert_key, fixture_key, sent_at, message) VALUES (?, ?, ?, ?)",
-                             (alert_key, fixture_key_value, datetime.now(timezone.utc).isoformat(), message))
-                conn.commit()
-                log.info("Telegram alert sent for fixture %s", fixture_key_value)
-            else:
-                log.warning("Telegram alert failed: HTTP %s", response.status_code)
-        except (requests.RequestException, ValueError) as exc:
-            log.warning("Telegram alert request failed: %s", str(exc)[:160])
+        conn.execute("""INSERT INTO alerts_pending
+            (alert_key, fixture_key, created_at, message, attempts, last_error)
+            VALUES (?, ?, ?, ?, 0, NULL) ON CONFLICT(alert_key) DO NOTHING""",
+            (alert_key, fixture_key_value, datetime.now(timezone.utc).isoformat(), message))
+    conn.commit()
+    retry_pending_telegram_alerts(conn)
 
 
 def collect_leagues_if_stale(conn):
@@ -363,6 +384,7 @@ def save_odds(conn, key, payload):
 
 
 def run_once(conn, cycle):
+    retry_pending_telegram_alerts(conn)
     collect_leagues_if_stale(conn)
     # A single bulk request for live fixtures plus stats/events limits free-tier request use.
     items = request_json("/fixtures", {"status": "live", "per_page": 50, "include": "stats,events"})
