@@ -1671,6 +1671,83 @@ def apifootball_com_detail(action, match_id):
     except (requests.RequestException, ValueError, TypeError) as exc:
         return None, f"APIFootball.com bağlantı/JSON hatası: {exc}"
 
+@st.cache_data(ttl=60, show_spinner=False)
+def five_dollar_fixture_events(fixture_id):
+    """Fetch the real event timeline including goals, corners, cards and substitutions."""
+    if not FIVE_DOLLAR_FOOTBALL_API_KEY:
+        return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
+    fixture_id = str(fixture_id or "").strip()
+    if not fixture_id.isdigit():
+        return None, "5DollarFootballAPI maç kimliği geçersiz."
+    try:
+        response = requests.get(
+            f"https://api.5dollarfootballapi.com/v1/fixtures/{fixture_id}/events",
+            headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"},
+            timeout=15,
+        )
+        if response.status_code != 200:
+            return None, f"5DollarFootballAPI olaylar HTTP {response.status_code}: {response.text[:160]}"
+        payload = response.json()
+        if payload.get("success") == 0:
+            return None, str((payload.get("error") or {}).get("message") or "Maç olayları alınamadı.")[:180]
+        data = payload.get("data") or {}
+        events = data.get("events") if isinstance(data, dict) else data
+        return events or [], None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        return None, f"5DollarFootballAPI olay bağlantı/JSON hatası: {exc}"
+
+
+def show_five_dollar_events(fixture_id, match):
+    events, err = five_dollar_fixture_events(fixture_id)
+    if err:
+        st.warning(err)
+        return
+    if not events:
+        st.info("Bu maç için henüz olay kaydı yok.")
+        return
+    teams = (match or {}).get("teams") or {}
+    home_name = (teams.get("home") or {}).get("name", "Ev sahibi")
+    away_name = (teams.get("away") or {}).get("name", "Deplasman")
+    labels = {
+        "goal": "Gol", "corner": "Korner", "yellow_card": "Sarı kart",
+        "red_card": "Kırmızı kart", "substitution": "Oyuncu değişikliği",
+        "missed_penalty": "Kaçan penaltı", "period_score": "Devre skoru",
+        "penalty": "Penaltı", "own_goal": "Kendi kalesine gol",
+    }
+    rows = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or event.get("event") or "Olay")
+        team_key = str(event.get("team") or "").lower()
+        team_name = home_name if team_key in ("home", "1") else away_name if team_key in ("away", "2") else "—"
+        minute = event.get("minute")
+        minute_text = f"{minute}'" if minute is not None else str(event.get("period") or "—")
+        details = []
+        if event.get("count") not in (None, 1):
+            details.append(f"Adet: {event.get('count')}")
+        if event.get("player_in"):
+            details.append(f"Giren: {event.get('player_in')}")
+        if event.get("player_out"):
+            details.append(f"Çıkan: {event.get('player_out')}")
+        if isinstance(event.get("score"), dict):
+            score = event["score"]
+            details.append(f"{score.get('home', '—')}–{score.get('away', '—')}")
+        rows.append({
+            "Dakika": minute_text,
+            "Olay": labels.get(event_type.lower(), event_type.replace("_", " ").title()),
+            "Takım": team_name,
+            "Ayrıntı": " · ".join(details) or "—",
+        })
+    if not rows:
+        st.info("Sağlayıcı bu maç için gösterilebilir olay döndürmedi.")
+        return
+    rows.sort(key=lambda row: (int(row["Dakika"].rstrip("'")) if row["Dakika"].rstrip("'").isdigit() else 999, row["Olay"]))
+    st.subheader("Canlı olay akışı")
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.caption("Kaynak: 5DollarFootballAPI; yalnızca sağlayıcının döndürdüğü olaylar gösterilir.")
+
+
 def show_stats(fixture_id, match):
     source = match.get("_source") or match.get("source")
     if source == "5DollarFootballAPI":
@@ -1710,6 +1787,25 @@ def show_stats(fixture_id, match):
             pair = (match or {}).get(key) or {}
             if isinstance(pair, dict) and ("home" in pair or "away" in pair):
                 append_pair(label, pair)
+                half_pair = {"home": pair.get("half_home"), "away": pair.get("half_away")}
+                if any(value is not None for value in half_pair.values()):
+                    append_pair("Corner Kicks", half_pair, "İlk yarı — ")
+        cards = (match or {}).get("cards") or {}
+        if isinstance(cards, dict):
+            for card_key, card_label in (("yellow", "Sarı kart"), ("red", "Kırmızı kart")):
+                card_pair = {
+                    "home": (cards.get("home") or {}).get(card_key) if isinstance(cards.get("home"), dict) else None,
+                    "away": (cards.get("away") or {}).get(card_key) if isinstance(cards.get("away"), dict) else None,
+                }
+                if any(value is not None for value in card_pair.values()):
+                    append_pair(card_label, card_pair)
+            for card_key, card_label in (("yellow", "Sarı kart"), ("red", "Kırmızı kart")):
+                half_pair = {
+                    "home": (cards.get("home") or {}).get("half_" + card_key) if isinstance(cards.get("home"), dict) else None,
+                    "away": (cards.get("away") or {}).get("half_" + card_key) if isinstance(cards.get("away"), dict) else None,
+                }
+                if any(value is not None for value in half_pair.values()):
+                    append_pair(card_label, half_pair, "İlk yarı — ")
         if not table_rows:
             st.info("5DollarFootballAPI bu maç için henüz istatistik döndürmedi.")
             return None
