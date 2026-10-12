@@ -1,0 +1,35 @@
+name: Background football collector
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: football-background-collector
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install collector dependencies
+        run: pip install -r requirements.txt
+      - name: Collect one batch
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FIVE_DOLLAR_FOOTBALL_API_KEY: ${{ secrets.FIVE_DOLLAR_FOOTBALL_API_KEY }}
+          COLLECTOR_MAX_FIXTURES: "8"
+          COLLECTOR_STATS_EVERY: "2"
+          COLLECTOR_ODDS_EVERY: "6"
+        run: |
+          if [ -z "$DATABASE_URL" ] || [ -z "$FIVE_DOLLAR_FOOTBALL_API_KEY" ]; then
+            echo "::notice::Add DATABASE_URL and FIVE_DOLLAR_FOOTBALL_API_KEY in repository Actions secrets."
+            exit 0
+          fi
+          python background_collector.py --once
