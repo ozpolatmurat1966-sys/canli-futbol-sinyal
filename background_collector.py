@@ -213,9 +213,23 @@ def save_odds(conn, key, payload):
                         break
                 except (TypeError, ValueError):
                     pass
+            market_names = {
+                "1x2": "Maç Sonucu (1X2)", "goal_line": "Gol Alt/Üst",
+                "goal_line_half": "İlk Yarı Gol Alt/Üst", "corner_line": "Korner Alt/Üst",
+                "corner_line_half": "İlk Yarı Korner Alt/Üst", "card_line": "Kart Alt/Üst",
+                "card_line_half": "İlk Yarı Kart Alt/Üst", "btts": "Karşılıklı Gol",
+                "asian_handicap": "Asya Handikap", "corner_asian": "Asya Korner Handikap",
+                "card_asian": "Asya Kart Handikap", "player_shots": "Oyuncu Şutları",
+                "player_goals": "Oyuncu Golü", "player_assists": "Oyuncu Asisti",
+                "player_cards": "Oyuncu Kartı", "player_fouls": "Oyuncu Faulleri",
+            }
+            containers = {"data", "response", "bookmakers", "odds", "fixtures", "events", "markets"}
             for k, v in node.items():
                 if isinstance(v, (dict, list)):
-                    walk(v, next_market, next_book, next_stage, next_line)
+                    key = str(k).lower()
+                    child_market = next_market if key in containers else market_names.get(key, str(k).replace("_", " ").title())
+                    child_stage = str(k).title() if key in ("opening", "closing", "inplay", "live") else next_stage
+                    walk(v, child_market, next_book, child_stage, next_line)
     walk(payload)
     conn.commit()
     return count
