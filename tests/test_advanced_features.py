@@ -71,7 +71,7 @@ class LeagueInventoryTests(unittest.TestCase):
     def test_missing_api_key_does_not_make_request(self):
         rows, error = fetch_leagues("")
         self.assertEqual(rows, [])
-        self.assertIn("anahtarı", error)
+        self.assertIn("tanımlı değil", error)
 
 
 if __name__ == "__main__":
