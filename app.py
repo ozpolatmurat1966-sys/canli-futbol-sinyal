@@ -1020,6 +1020,7 @@ def normalize_5dollar_fixture(item):
         },
         "goals": {"home": goals.get("home"), "away": goals.get("away")},
         "corners": item.get("corners") or {},
+        "cards": item.get("cards") or {},
         "events": item.get("events") or [],
         "statistics": item.get("statistics") or item.get("stats") or {},
         "_source": "5DollarFootballAPI", "source": "5DollarFootballAPI", "_raw_5dollar": item,
@@ -2058,7 +2059,11 @@ def show_odds(fixture_id, match=None):
                     for key, option in (("home", "Ev Sahibi (1)"), ("draw", "Beraberlik (X)"), ("away", "Deplasman (2)")):
                         add_price("Maç Sonucu (1X2)", option, quote.get(key), bookmaker, stage.title())
                     break
-            for market_key, market_label in (("goal_line", "Gol Alt/Üst"), ("corner_line", "Korner Alt/Üst"), ("card_line", "Kart Alt/Üst")):
+            for market_key, market_label in (
+                ("goal_line", "Gol Alt/Üst"), ("corner_line", "Korner Alt/Üst"),
+                ("card_line", "Kart Alt/Üst"), ("goal_line_half", "İlk Yarı Gol Alt/Üst"),
+                ("corner_line_half", "İlk Yarı Korner Alt/Üst"), ("card_line_half", "İlk Yarı Kart Alt/Üst"),
+            ):
                 market_data = markets.get(market_key) or {}
                 for stage in stage_order:
                     quote = market_data.get(stage)
@@ -2067,14 +2072,20 @@ def show_odds(fixture_id, match=None):
                         add_price(market_label, "Üst", quote.get("over"), bookmaker, stage.title(), line)
                         add_price(market_label, "Alt", quote.get("under"), bookmaker, stage.title(), line)
                         break
-            asian = markets.get("asian_handicap") or {}
-            for stage in stage_order:
-                quote = asian.get(stage)
-                if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("home", "away")):
-                    line = quote.get("line")
-                    add_price("Asya Handikap", "Ev Sahibi", quote.get("home"), bookmaker, stage.title(), line)
-                    add_price("Asya Handikap", "Deplasman", quote.get("away"), bookmaker, stage.title(), line)
-                    break
+            for market_key, market_label in (
+                ("asian_handicap", "Asya Handikap"),
+                ("corner_asian", "Asya Korner Handikap"),
+                ("card_asian", "Asya Kart Handikap"),
+                ("asian_handicap_half", "İlk Yarı Asya Handikap"),
+            ):
+                asian = markets.get(market_key) or {}
+                for stage in stage_order:
+                    quote = asian.get(stage)
+                    if isinstance(quote, dict) and any(quote.get(k) is not None for k in ("home", "away")):
+                        line = quote.get("line")
+                        add_price(market_label, "Ev Sahibi", quote.get("home"), bookmaker, stage.title(), line)
+                        add_price(market_label, "Deplasman", quote.get("away"), bookmaker, stage.title(), line)
+                        break
             btts = markets.get("btts") or {}
             for stage in stage_order:
                 quote = btts.get(stage)
