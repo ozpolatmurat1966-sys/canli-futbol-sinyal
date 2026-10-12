@@ -211,9 +211,6 @@ def build_pressure_rows(fixture, snapshots):
         if scores:
             row["Ev sahibi baskı göstergesi"] = scores.get("home")
             row["Deplasman baskı göstergesi"] = scores.get("away")
-            row["Gözlenen değişimler"] = " | ".join(
-                f'{home_name}: {observed["home"]}' if "home" in observed else "",
-                )
             details = []
             if "home" in observed:
                 details.append(f'{home_name}: {observed["home"]}')
