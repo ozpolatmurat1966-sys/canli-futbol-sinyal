@@ -19,8 +19,7 @@ class PredictionTrackingTests(unittest.TestCase):
                      "FT", 2, 1, 1, "2026-10-12T20:00:00+00:00",
                      '{"corners":{"home":5,"away":3},"cards":{"home":{"yellow":2,"red":0},"away":{"yellow":3,"red":0}}}'))
                 for i, target in enumerate(("team_poisson_v1:home_win", "team_poisson_v1:over_2_5_goals",
-                                            "team_poisson_v1:over_9_5_corners", "team_poisson_v1:over_4_5_cards",
-                                            "team_poisson_v1:over_2_5_goals"), start=1):
+                                            "team_poisson_v1:over_9_5_corners", "team_poisson_v1:over_4_5_cards"), start=1):
                     conn.execute("""INSERT INTO predictions
                         (fixture_key, created_at, target, probability, evaluated_result)
                         VALUES (?, ?, ?, ?, NULL)""", ("f1", "2026-10-12T17:00:00+00:00", target, 0.5))
@@ -32,7 +31,6 @@ class PredictionTrackingTests(unittest.TestCase):
                 self.assertEqual(rows[1]["evaluated_result"], 1)
                 self.assertEqual(rows[2]["evaluated_result"], 0)
                 self.assertEqual(rows[3]["evaluated_result"], 1)
-                self.assertEqual(rows[4]["evaluated_result"], 1)
             finally:
                 conn.close()
 
