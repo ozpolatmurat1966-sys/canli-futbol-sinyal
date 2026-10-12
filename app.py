@@ -3162,6 +3162,13 @@ with source_tab:
     if st.button("🧪 Bağlantıları şimdi test et", key="test_all_providers"):
         test_rows = []
         with st.spinner("Her kaynağa birer hafif test isteği gönderiliyor..."):
+            # 5DollarFootballAPI is the current source with per-match stats and odds.
+            if FIVE_DOLLAR_FOOTBALL_API_KEY:
+                _, test_err = five_dollar_live_matches()
+                set_provider_status("5DollarFootballAPI", True, not bool(test_err),
+                                    (test_err or "Canlı fikstür uç noktası yanıt verdi; maç başına istatistik/oran uç noktaları ayrıca maç seçilince denenir.")[:180])
+            else:
+                set_provider_status("5DollarFootballAPI", False, False, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil.")
             # Eski API-Football devre dışı; bu kaynağa istek gönderilmez.
             if SPORTMONKS_API_TOKEN:
                 _, test_err = sportmonks_live_matches()
