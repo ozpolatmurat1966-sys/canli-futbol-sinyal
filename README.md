@@ -84,3 +84,11 @@ Bu proje artık Streamlit oturumundan bağımsız bir toplayıcı içerir:
 
 ## Günlük fikstür toplama
 Bağımsız toplayıcı canlı maçlara ek olarak yaklaşık saatte bir İstanbul takvim gününün fikstür listesini sorgular. Böylece maç öncesi kayıtlar ve sonuçlanmış maçlar için veri seti birikmesine yardımcı olur. Bu özellik yalnızca sağlayıcının API anahtarının erişebildiği ve yanıtında döndürdüğü kayıtları toplar; tüm tarihsel sezonları geriye dönük doldurmaz.
+
+
+## Canlı baskı ve iPhone görünümü
+- Canlı sinyaller ekranı kaydedilmiş şut, isabetli şut, korner ve tehlikeli atak istatistiklerinde zaman aralıklı artışları ağırlıklı bir **baskı göstergesi** olarak sunar. Bu değer gol olasılığı değildir; veri yoksa hesaplanmaz.
+- Canlı sinyaller sekmesindeki **iPhone için kart görünümü** tablo yerine maç kartlarıyla trend ve baskı göstergelerini gösterir.
+- Sanal bahis kayıt defteri, model olasılığı manuel olarak önceden biliniyorsa Brier skorunu da hesaplar; model olasılığı boşsa doldurulmuş gibi varsayılmaz.
+- Veri kalite paneli eski canlı kayıtları, skoru eksik tamamlanmış maçları, geçersiz oranları ve tekrarlanan oran gruplarını gösterir.
+- Bağımsız collector her başarılı/başarısız tur için PostgreSQL'de heartbeat kaydı tutar; panelde son durum gösterilir.
