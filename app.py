@@ -961,13 +961,84 @@ def thesportsdb_player_stats(player_id):
         return None, f"TheSportsDB oyuncu istatistikleri bağlantı/JSON hatası: {exc}"
 
 
+def normalize_5dollar_fixture(item):
+    """Normalize a 5DollarFootballAPI fixture without inventing unavailable fields."""
+    if not isinstance(item, dict):
+        return None
+    teams = item.get("teams") or {}
+    home_obj, away_obj = teams.get("home") or {}, teams.get("away") or {}
+    home = home_obj.get("name") if isinstance(home_obj, dict) else home_obj
+    away = away_obj.get("name") if isinstance(away_obj, dict) else away_obj
+    if not home or not away:
+        return None
+
+    goals = item.get("goals") or item.get("score") or {}
+    status_code = item.get("status_code")
+    raw_status = str(item.get("status") or item.get("state") or item.get("status_name") or status_code or "unknown").strip()
+    status_lower = raw_status.lower().replace("-", "_").replace(" ", "_")
+    minute = item.get("minute", item.get("elapsed"))
+    if minute is None and isinstance(status_code, (int, float)):
+        minute = int(status_code)
+    elif minute is None and str(status_code or "").strip().isdigit():
+        minute = int(str(status_code).strip())
+    try:
+        minute = int(minute) if minute is not None else None
+    except (TypeError, ValueError):
+        minute = None
+
+    if status_lower in ("half", "ht", "half_time", "halftime", "break", "interval"):
+        short = "HT"
+    elif status_lower in ("finished", "full_time", "ft", "after_extra_time", "after_penalties", "completed"):
+        short = "FT"
+    elif status_lower in ("scheduled", "not_started", "ns", "upcoming", "fixture", "pre_match"):
+        short = "NS"
+    elif status_lower in ("postponed", "pst"):
+        short = "PST"
+    elif status_lower in ("cancelled", "canceled", "canc"):
+        short = "CANC"
+    elif status_lower in ("unknown", "") and minute is None:
+        short = "NS"
+    else:
+        short = "LIVE"
+
+    league = item.get("league") or {}
+    if not isinstance(league, dict):
+        league = {"name": str(league)}
+    country = item.get("country") or {}
+    country_name = country.get("name", "") if isinstance(country, dict) else str(country or "")
+    kickoff = item.get("kickoff_utc") or item.get("date") or item.get("starting_at") or item.get("kickoff")
+    return {
+        "fixture": {"id": item.get("id"), "date": kickoff,
+                    "status": {"long": raw_status, "short": short, "elapsed": minute}},
+        "league": {"id": league.get("id"), "name": league.get("name", "Lig bilinmiyor"),
+                   "country": country_name, "round": item.get("round")},
+        "teams": {
+            "home": {"id": home_obj.get("id") if isinstance(home_obj, dict) else None,
+                     "name": home, "logo": home_obj.get("logo") if isinstance(home_obj, dict) else None},
+            "away": {"id": away_obj.get("id") if isinstance(away_obj, dict) else None,
+                     "name": away, "logo": away_obj.get("logo") if isinstance(away_obj, dict) else None},
+        },
+        "goals": {"home": goals.get("home"), "away": goals.get("away")},
+        "corners": item.get("corners") or {},
+        "events": item.get("events") or [],
+        "statistics": item.get("statistics") or item.get("stats") or {},
+        "_source": "5DollarFootballAPI", "source": "5DollarFootballAPI", "_raw_5dollar": item,
+    }
+
+
 @st.cache_data(ttl=45, show_spinner=False)
 def five_dollar_live_matches():
     """Fetch live fixtures from 5DollarFootballAPI."""
     if not FIVE_DOLLAR_FOOTBALL_API_KEY:
+        set_provider_status("5DollarFootballAPI", False, False, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil.")
         return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
     try:
-        response = requests.get("https://api.5dollarfootballapi.com/v1/fixtures", params={"status": "live", "per_page": 500}, headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"}, timeout=20)
+        response = requests.get(
+            "https://api.5dollarfootballapi.com/v1/fixtures",
+            params={"status": "live", "per_page": 500},
+            headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"},
+            timeout=20,
+        )
         if response.status_code != 200:
             message = f"5DollarFootballAPI HTTP {response.status_code}: {response.text[:160]}"
             set_provider_status("5DollarFootballAPI", True, False, message)
@@ -978,30 +1049,55 @@ def five_dollar_live_matches():
             message = str(error.get("message") or "API isteği başarısız.")[:160]
             set_provider_status("5DollarFootballAPI", True, False, message)
             return None, message
-        normalized = []
-        for item in payload.get("data") or payload.get("response") or []:
-            teams = item.get("teams") or {}
-            home_obj, away_obj = teams.get("home") or {}, teams.get("away") or {}
-            home = home_obj.get("name") if isinstance(home_obj, dict) else home_obj
-            away = away_obj.get("name") if isinstance(away_obj, dict) else away_obj
-            if not home or not away:
-                continue
-            goals = item.get("goals") or {}
-            raw_status = str(item.get("status") or item.get("state") or "in_play").lower()
-            short = "HT" if "half" in raw_status else ("FT" if raw_status in ("finished", "full_time", "ft") else "LIVE")
-            minute = item.get("minute", item.get("elapsed"))
-            try:
-                minute = int(minute) if minute is not None else None
-            except (TypeError, ValueError):
-                minute = None
-            league = item.get("league") or {}
-            if not isinstance(league, dict): league = {"name": str(league)}
-            kickoff = item.get("kickoff_utc") or item.get("date") or item.get("starting_at")
-            normalized.append({"fixture": {"id": item.get("id"), "date": kickoff, "status": {"long": raw_status, "short": short, "elapsed": minute}}, "league": {"id": league.get("id"), "name": league.get("name", "Lig bilinmiyor"), "country": (item.get("country") or {}).get("name", "") if isinstance(item.get("country"), dict) else str(item.get("country") or ""), "round": item.get("round")}, "teams": {"home": {"id": home_obj.get("id") if isinstance(home_obj, dict) else None, "name": home, "logo": home_obj.get("logo") if isinstance(home_obj, dict) else None}, "away": {"id": away_obj.get("id") if isinstance(away_obj, dict) else None, "name": away, "logo": away_obj.get("logo") if isinstance(away_obj, dict) else None}}, "goals": {"home": goals.get("home"), "away": goals.get("away")}, "corners": item.get("corners") or {}, "_source": "5DollarFootballAPI", "source": "5DollarFootballAPI", "_raw_5dollar": item})
+        normalized = [fixture for item in (payload.get("data") or payload.get("response") or [])
+                      if (fixture := normalize_5dollar_fixture(item)) is not None]
         set_provider_status("5DollarFootballAPI", True, True, f"HTTP 200; {len(normalized)} canlı maç.")
         return normalized, None
-    except (requests.RequestException, ValueError) as exc:
+    except (requests.RequestException, ValueError, TypeError) as exc:
         message = f"5DollarFootballAPI bağlantı hatası: {exc}"
+        set_provider_status("5DollarFootballAPI", True, False, message[:160])
+        return None, message
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def five_dollar_matches_for_date(date_text):
+    """Fetch fixtures for the selected Istanbul calendar day; free coverage depends on plan."""
+    if not FIVE_DOLLAR_FOOTBALL_API_KEY:
+        return None, "FIVE_DOLLAR_FOOTBALL_API_KEY tanımlı değil."
+    try:
+        from zoneinfo import ZoneInfo
+        selected_day = date.fromisoformat(str(date_text)[:10])
+        istanbul = ZoneInfo("Europe/Istanbul")
+        start_local = datetime.combine(selected_day, datetime.min.time(), tzinfo=istanbul)
+        end_local = start_local + timedelta(days=1)
+        params = {
+            "start_time": int(start_local.astimezone(timezone.utc).timestamp()),
+            "end_time": int(end_local.astimezone(timezone.utc).timestamp()),
+            "per_page": 100,
+        }
+        response = requests.get(
+            "https://api.5dollarfootballapi.com/v1/fixtures",
+            params=params,
+            headers={"Authorization": f"Bearer {FIVE_DOLLAR_FOOTBALL_API_KEY}"},
+            timeout=20,
+        )
+        if response.status_code != 200:
+            message = f"5DollarFootballAPI fikstür HTTP {response.status_code}: {response.text[:160]}"
+            set_provider_status("5DollarFootballAPI", True, False, message)
+            return None, message
+        payload = response.json()
+        if payload.get("success") == 0:
+            error = payload.get("error") or {}
+            message = str(error.get("message") or "Fikstür isteği başarısız.")[:160]
+            set_provider_status("5DollarFootballAPI", True, False, message)
+            return None, message
+        items = payload.get("data") or payload.get("response") or []
+        normalized = [fixture for item in items
+                      if (fixture := normalize_5dollar_fixture(item)) is not None]
+        set_provider_status("5DollarFootballAPI", True, True, f"HTTP 200; seçilen tarih için {len(normalized)} fikstür.")
+        return normalized, None
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        message = f"5DollarFootballAPI fikstür bağlantı/JSON hatası: {exc}"
         set_provider_status("5DollarFootballAPI", True, False, message[:160])
         return None, message
 
@@ -3018,18 +3114,28 @@ with date_tab:
     if st.button("Fikstürü getir"):
         with st.spinner("Fikstür kaynakları birleştiriliyor..."):
             # Eski API-Football devre dışı; ücretsiz kaynaklar kullanılır.
-            primary = []
+            five_matches, five_err = five_dollar_matches_for_date(chosen.isoformat())
             fd_matches, fd_err = football_data_matches_for_date(chosen.isoformat())
             oldb_matches, oldb_err = openligadb_matches_for_date(chosen.isoformat())
             tsdb_matches, tsdb_err = thesportsdb_matches_for_date(chosen.isoformat())
             espn_matches, espn_err = espn_matches_for_date(chosen.isoformat())
-            combined = merge_fixture_sources(primary, (fd_matches or []) + (oldb_matches or []) + (tsdb_matches or []) + (espn_matches or []))
+            # Put the source with real per-fixture stats/odds first so deduplication
+            # retains its own match ID when the same fixture exists in multiple feeds.
+            combined = merge_fixture_sources(
+                (five_matches or []),
+                (fd_matches or []) + (oldb_matches or []) + (tsdb_matches or []) + (espn_matches or [])
+            )
             st.session_state["date_matches"] = combined
             st.session_state["date_label"] = chosen.isoformat()
             st.session_state["date_sources"] = {
-                "football-data.org": len(fd_matches or []), "OpenLigaDB": len(oldb_matches or []), "TheSportsDB": len(tsdb_matches or []), "ESPN": len(espn_matches or [])
+                "5DollarFootballAPI": len(five_matches or []),
+                "football-data.org": len(fd_matches or []),
+                "OpenLigaDB": len(oldb_matches or []),
+                "TheSportsDB": len(tsdb_matches or []),
+                "ESPN": len(espn_matches or []),
             }
             st.session_state["date_errors"] = {
+                "5DollarFootballAPI": five_err,
                 "football-data.org": fd_err,
                 "OpenLigaDB": oldb_err,
                 "TheSportsDB": tsdb_err,
