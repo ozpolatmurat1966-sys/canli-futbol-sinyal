@@ -84,8 +84,8 @@ def inspect_database(db_connect):
     """Summarize actual saved coverage and conservatively flag same-day cross-source score conflicts."""
     conn = db_connect()
     try:
-        def count(sql):
-            row = conn.execute(sql).fetchone()
+        def count(sql, params=()):
+            row = conn.execute(sql, params).fetchone()
             return int(row["n"] if row and row["n"] is not None else 0)
         fixtures = count("SELECT COUNT(*) AS n FROM fixtures")
         live = count("SELECT COUNT(*) AS n FROM fixtures WHERE UPPER(status) IN ('LIVE','1H','2H','HT','INPLAY','IN_PLAY')")
@@ -94,9 +94,18 @@ def inspect_database(db_connect):
         odds_count = count("SELECT COUNT(*) AS n FROM odds_history WHERE odd > 1")
         inventory = count("SELECT COUNT(*) AS n FROM league_inventory")
         paper_settled = count("SELECT COUNT(*) AS n FROM paper_bets WHERE status='settled'")
-        stale = count("""SELECT COUNT(*) AS n FROM fixtures
-            WHERE last_seen IS NULL OR last_seen < ?""".replace("?", "%s") if False else
-            "SELECT COUNT(*) AS n FROM fixtures WHERE last_seen IS NULL")
+        stale_cutoff_text = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() - 3600, timezone.utc).isoformat()
+        stale_live = count("""SELECT COUNT(*) AS n FROM fixtures
+            WHERE UPPER(status) IN ('LIVE','1H','2H','HT','INPLAY','IN_PLAY')
+            AND (last_seen IS NULL OR last_seen < ?)""", (stale_cutoff_text,))
+        finished_missing_score = count("""SELECT COUNT(*) AS n FROM fixtures
+            WHERE finished=1 AND (home_goals IS NULL OR away_goals IS NULL)""")
+        invalid_odds = count("SELECT COUNT(*) AS n FROM odds_history WHERE odd IS NULL OR odd <= 1")
+        duplicate_odds = conn.execute("""SELECT COUNT(*) AS n FROM (
+            SELECT fixture_key, market, option_name, bookmaker, stage, line
+            FROM odds_history GROUP BY fixture_key, market, option_name, bookmaker, stage, line
+            HAVING COUNT(*) > 1
+        ) duplicate_groups""").fetchone()["n"]
         latest = conn.execute("SELECT MAX(last_seen) AS t FROM fixtures").fetchone()["t"]
         sources = conn.execute("""SELECT source, COUNT(*) AS fixtures, MAX(last_seen) AS last_seen
             FROM fixtures GROUP BY source ORDER BY fixtures DESC""").fetchall()
@@ -130,6 +139,8 @@ def inspect_database(db_connect):
         return {
             "fixtures": fixtures, "live": live, "completed": completed, "snapshots": snapshots,
             "odds": odds_count, "leagues": inventory, "paper_settled": paper_settled,
+            "stale_live": stale_live, "finished_missing_score": finished_missing_score,
+            "invalid_odds": invalid_odds, "duplicate_odds_groups": int(duplicate_odds or 0),
             "latest_fixture_seen": latest, "sources": [dict(r) for r in sources],
             "markets": [dict(r) for r in markets], "conflicts": conflicts[:100],
         }
@@ -200,6 +211,14 @@ def render_readiness_center(st, db_connect, api_key):
         st.caption(f'Son maç kaydı: {metrics["latest_fixture_seen"]}')
     else:
         st.caption("Henüz kalıcı maç kaydı yok.")
+
+    with st.expander("Veri kalitesi göstergeleri", expanded=False):
+        q1, q2, q3, q4 = st.columns(4)
+        q1.metric("1 saati aşan canlı kayıt", metrics["stale_live"])
+        q2.metric("Skoru eksik tamamlanmış maç", metrics["finished_missing_score"])
+        q3.metric("Geçersiz/boş oran kaydı", metrics["invalid_odds"])
+        q4.metric("Tekrarlı oran grubu", metrics["duplicate_odds_groups"])
+        st.caption("Tekrarlı oran grubu, aynı maç/pazar/seçenek/şirket/aşama/çizgi kombinasyonunun birden fazla kaydedilmesidir. Tekrarlar bazen gerçek zamanlı farklı gözlemlerden kaynaklanabileceği için otomatik silinmez.")
 
     with st.expander("Kaynaklara göre gerçek veri kapsamı", expanded=False):
         if metrics["sources"]:
