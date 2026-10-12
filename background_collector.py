@@ -6,7 +6,8 @@ import logging
 import os
 import signal
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -22,6 +23,7 @@ POLL_SECONDS = max(60, int(os.getenv("COLLECTOR_POLL_SECONDS", "90")))
 STATS_EVERY = max(1, int(os.getenv("COLLECTOR_STATS_EVERY", "3")))
 ODDS_EVERY = max(1, int(os.getenv("COLLECTOR_ODDS_EVERY", "5")))
 MAX_FIXTURES = max(1, int(os.getenv("COLLECTOR_MAX_FIXTURES", "30")))
+DATE_FIXTURES_EVERY = max(1, int(os.getenv("COLLECTOR_DATE_FIXTURES_EVERY", "12")))
 STOP = False
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -383,9 +385,39 @@ def save_odds(conn, key, payload):
     return count
 
 
+def istanbul_day_window(now=None):
+    """Return Unix timestamps covering the current Istanbul calendar day."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    local_now = now.astimezone(ZoneInfo("Europe/Istanbul"))
+    start_local = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=ZoneInfo("Europe/Istanbul"))
+    end_local = start_local + timedelta(days=1)
+    return int(start_local.astimezone(timezone.utc).timestamp()), int(end_local.astimezone(timezone.utc).timestamp())
+
+
+def collect_today_fixtures(conn):
+    """Occasionally persist today's scheduled/live/completed fixtures for form and backtest datasets."""
+    start_time, end_time = istanbul_day_window()
+    items = request_json("/fixtures", {"start_time": start_time, "end_time": end_time, "per_page": 100})
+    saved = 0
+    for item in items:
+        match = normalize_fixture(item)
+        if not match:
+            continue
+        save_snapshot(conn, match, (item.get("statistics") or item.get("stats")) if isinstance(item, dict) else None)
+        saved += 1
+    log.info("Today's Istanbul-day fixtures observed: %s", saved)
+
+
 def run_once(conn, cycle):
     retry_pending_telegram_alerts(conn)
     collect_leagues_if_stale(conn)
+    if cycle % DATE_FIXTURES_EVERY == 0:
+        try:
+            collect_today_fixtures(conn)
+        except Exception as exc:
+            log.warning("Daily fixture collection failed: %s", str(exc)[:180])
     # A single bulk request for live fixtures plus stats/events limits free-tier request use.
     items = request_json("/fixtures", {"status": "live", "per_page": 50, "include": "stats,events"})
     matches = [normalized for item in items if (normalized := normalize_fixture(item))]
@@ -418,8 +450,8 @@ def main():
         raise SystemExit("DATABASE_URL is required for a persistent independent worker; configure PostgreSQL.")
     conn = connect_history_db(DATABASE_URL)
     cycle = int(time.time() // 300) if args.once else 0
-    log.info("Collector started: poll=%ss stats_every=%s odds_every=%s max_fixtures=%s",
-             POLL_SECONDS, STATS_EVERY, ODDS_EVERY, MAX_FIXTURES)
+    log.info("Collector started: poll=%ss stats_every=%s odds_every=%s date_fixtures_every=%s max_fixtures=%s",
+             POLL_SECONDS, STATS_EVERY, ODDS_EVERY, DATE_FIXTURES_EVERY, MAX_FIXTURES)
     while not STOP:
         if not args.once:
             cycle += 1
